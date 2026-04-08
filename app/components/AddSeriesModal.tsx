@@ -112,7 +112,9 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
 
     const formatRuntime = (minutesStr: string | number) => {
         if (!minutesStr) return '';
-        const mins = parseInt(String(minutesStr).replace(/[^0-9]/g, ''));
+        const strVal = String(minutesStr);
+        if (strVal.includes('h')) return strVal; // Already physically formatted natively by IMDb
+        const mins = parseInt(strVal.replace(/[^0-9]/g, ''));
         if (isNaN(mins) || mins === 0) return '';
         if (mins < 60) return `${mins}m`;
         const hours = Math.floor(mins / 60);
