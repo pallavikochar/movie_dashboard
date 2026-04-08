@@ -134,15 +134,15 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                 const res = await axios.get(proxyUrl, { timeout: 8000 });
                 const html = res.data.contents;
                 
-                // Try JSON-LD or Next DATA patterns
+                // Try JSON-LD or Next DATA patterns (Case insensitive)
                 const ldMatch = html.match(/"aggregateRating":\s*\{[^}]*"ratingValue":\s*"?([\d.]+)"?/i);
                 if (ldMatch) return ldMatch[1];
                 
-                const nextMatch = html.match(/"aggregateRating":\s*([\d.]+)/i); // Simplified pattern
-                if (nextMatch) return nextMatch[1];
+                const ratingValueMatch = html.match(/"ratingValue":\s*"?([\d.]+)"?/i);
+                if (ratingValueMatch) return ratingValueMatch[1];
                 
-                // Fallback to searching for the 10/10 pattern
-                const scoreMatch = html.match(/>([\d\.]+)\s*<\/span>[^<]*<span[^>]*>\/10/);
+                // Look for the score in the HTML meta or spans
+                const scoreMatch = html.match(/([\d\.]+)\/10/);
                 if (scoreMatch) return scoreMatch[1];
             } catch (err) {
                 console.warn('CORS Scrape failed');
@@ -238,6 +238,7 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                     }
                 } catch (e) { }
             }
+            const tmdbRating = tmdbData?.vote_average ? tmdbData.vote_average.toFixed(1).toString() : (selectedObj?.rating || '');
 
             setFormData({
                 ...formData,
@@ -247,7 +248,7 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                 episodes: tmdbData?.number_of_episodes || 0,
                 length: richRuntime ? formatRuntime(richRuntime) : '',
                 genre: richGenres || '',
-                rating: officialImdbRating || (tmdbData?.vote_average ? tmdbData.vote_average.toFixed(1).toString() : (selectedObj?.rating || '')),
+                rating: officialImdbRating || tmdbRating,
                 thumbnail: tmdbData?.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}` : (selectedObj?.i?.imageUrl || '')
             });
             
@@ -256,6 +257,16 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                 type: isSeries ? 'Series' : 'Movie',
                 thumbnail: tmdbData?.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}` : (selectedObj?.i?.imageUrl || '')
             });
+
+            // Delayed Sync: In case the fetch was extremely slow, we check again
+            if (!officialImdbRating && imdbId) {
+                fetchImdbRating(imdbId).then(finalRating => {
+                    if (finalRating) {
+                        setFormData(prev => ({ ...prev, rating: finalRating }));
+                    }
+                });
+            }
+
             setSearchQuery('');
         } catch (error) {
             console.error(error);
