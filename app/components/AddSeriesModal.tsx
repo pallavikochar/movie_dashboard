@@ -156,30 +156,37 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
         const selectedObj = searchResults.find(r => r.id === fetchId);
         setSearchResults([]);
         
-        // 1. If it's a native IMDB ID (starts with tt), we use the original native scraper first!
+        // 1. NATIVE SCRAPER PRIORITY (Local Development)
         if (fetchId.startsWith('tt')) {
             try {
                 const res = await axios.get(`/api/scrape?imdbId=${encodeURIComponent(fetchId)}`);
                 const data = res.data;
+                
+                if (data && !data.error) {
+                    setFormData({
+                        ...formData,
+                        title: data.title || itemTitle,
+                        type: data.type || 'Movie',
+                        seasons: data.seasons || 0,
+                        episodes: data.episodes || 0,
+                        length: formatRuntime(data.runtime),
+                        genre: data.genres || '',
+                        rating: data.rating || '',
+                        thumbnail: data.poster || '',
+                        finishedDate: ''
+                    });
 
-                setFormData({
-                    ...formData,
-                    title: data.title || itemTitle,
-                    type: data.type || formData.type,
-                    seasons: data.seasons || 0,
-                    episodes: data.episodes || 0,
-                    length: data.runtime ? formatRuntime(data.runtime) : '',
-                    genre: data.genres || '',
-                    rating: data.rating || '',
-                    thumbnail: data.poster || '',
-                });
-
-                setPreview(data);
-                setSearchQuery('');
-                setLoading(false);
-                return;
+                    setPreview({
+                        title: data.title || itemTitle,
+                        type: data.type || 'Movie',
+                        thumbnail: data.poster || ''
+                    });
+                    setSearchQuery('');
+                    setLoading(false);
+                    return;
+                }
             } catch (error) {
-                console.warn('Native scrape failed, degrading');
+                console.warn('Native scrape failed locally, trying remote fallbacks');
             }
         }
 
