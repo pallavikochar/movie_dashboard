@@ -86,39 +86,61 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                 const proxyRes = await axios.get(proxyUrl);
                 const html = proxyRes.data.contents;
                 
-                // Regex for IMDb search items in the current layout
-                const results: any[] = [];
-                const itemMatches = html.matchAll(/<li[^>]*class="[^"]*ipc-metadata-list-summary-item[^"]*"[^>]*>([\s\S]*?)<\/li>/gi);
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+                const items = doc.querySelectorAll('.ipc-metadata-list-summary-item');
                 
-                for (const match of itemMatches) {
-                    const block = match[1];
-                    const idMatch = block.match(/href="\/title\/(tt\d+)\//i);
-                    const titleMatch = block.match(/class="[^"]*ipc-metadata-list-summary-item__t[^"]*"[^>]*>([^<]+)/i);
-                    const yearMatch = block.match(/class="[^"]*ipc-metadata-list-summary-item__li[^"]*"[^>]*>([^<]+)/i);
-                    const ratingMatch = block.match(/aria-label="IMDb rating: ([\d.]+)"/i) || block.match(/class="[^"]*ipc-rating-star--imdb[^"]*"[^>]*>([\d.]+)/i);
-                    const thumbMatch = block.match(/src="([^"]+)"/i);
+                const results: any[] = [];
+                items.forEach((item: any) => {
+                    const idLink = item.querySelector('a.ipc-metadata-list-summary-item__t');
+                    const idMatch = idLink?.getAttribute('href')?.match(/\/title\/(tt\d+)\//);
+                    const title = item.querySelector('.ipc-metadata-list-summary-item__t')?.textContent;
+                    const year = item.querySelector('.ipc-metadata-list-summary-item__li')?.textContent;
+                    const rating = item.querySelector('.ipc-rating-star--imdb')?.textContent;
+                    const img = item.querySelector('img.ipc-image')?.getAttribute('src');
                     
-                    if (idMatch && titleMatch) {
+                    if (idMatch && title) {
                         results.push({
                             id: idMatch[1],
-                            l: titleMatch[1],
-                            y: yearMatch ? yearMatch[1] : '',
-                            q: block.includes('TV Series') ? 'TV Series' : 'Movie',
-                            rating: ratingMatch ? ratingMatch[1] : '',
-                            i: { imageUrl: thumbMatch ? thumbMatch[1] : '' },
-                            s: '' // We'll get cast later if needed
+                            l: title.trim(),
+                            y: year?.trim() || '',
+                            q: item.textContent.includes('TV Series') ? 'TV Series' : 'Movie',
+                            rating: rating?.trim() || '',
+                            i: { imageUrl: img || '' },
+                            s: ''
                         });
                     }
-                    if (results.length >= 8) break;
-                }
+                });
                 
                 if (results.length > 0) {
                     setSearchResults(results);
                     return;
                 }
             } catch (fallbackError) {
-                console.warn('Proxy search failed', fallbackError);
+                console.warn('Proxy search failed, falling back to TMDb', fallbackError);
             }
+            
+            // Priority 3: TMDb Search (Third-choice Fallback)
+            try {
+                const tmdbKey = '15d2ea6d0dc1d476efbca3eba2b9bbfb';
+                const res = await axios.get(`https://api.themoviedb.org/3/search/multi?api_key=${tmdbKey}&query=${encodeURIComponent(searchQuery)}`);
+                const filtered = (res.data.results || []).filter((r: any) => r.media_type === 'movie' || r.media_type === 'tv');
+                if (filtered.length > 0) {
+                    const mapped = filtered.map((r: any) => ({
+                        id: r.id.toString(),
+                        l: r.title || r.name,
+                        y: (r.release_date || r.first_air_date || '').split('-')[0],
+                        q: r.media_type === 'tv' ? 'TV Series' : 'Movie',
+                        s: r.overview || '',
+                        i: { imageUrl: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : '' },
+                        rating: r.vote_average ? r.vote_average.toFixed(1).toString() : '',
+                    }));
+                    setSearchResults(mapped);
+                    return;
+                }
+            } catch (e) {}
+            
+            alert('No results found on IMDb or TMDb.');
         } finally {
             setLoading(false);
         }
