@@ -133,21 +133,53 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
             setSearchQuery('');
 
         } catch (error) {
-            console.warn('API fetch failed, populating partial known metrics');
+            console.warn('API fetch failed, populating using TMDB details');
             if (selectedObj) {
                 const isSeries = selectedObj.q === 'TV Series';
-                setFormData({
-                    ...formData,
-                    title: selectedObj.l || itemTitle,
-                    type: isSeries ? 'Series' : 'Movie',
-                    rating: selectedObj.rating || '',
-                    thumbnail: selectedObj.i?.imageUrl || ''
-                });
-                setPreview({
-                    title: selectedObj.l || itemTitle,
-                    type: isSeries ? 'Series' : 'Movie',
-                    thumbnail: selectedObj.i?.imageUrl || ''
-                });
+                const tmdbKey = '15d2ea6d0dc1d476efbca3eba2b9bbfb';
+                
+                try {
+                    const endpoint = isSeries ? `tv/${imdbId}` : `movie/${imdbId}`;
+                    const customRes = await axios.get(`https://api.themoviedb.org/3/${endpoint}?api_key=${tmdbKey}`);
+                    const tmdbData = customRes.data;
+                    
+                    const richGenres = tmdbData.genres ? tmdbData.genres.map((g: any) => g.name).join(', ') : '';
+                    let richRuntime = '';
+                    if (!isSeries && tmdbData.runtime) richRuntime = `${tmdbData.runtime}m`;
+                    if (isSeries && tmdbData.episode_run_time && tmdbData.episode_run_time.length > 0) richRuntime = `${tmdbData.episode_run_time[0]}m`;
+
+                    setFormData({
+                        ...formData,
+                        title: tmdbData.title || tmdbData.name || selectedObj.l || itemTitle,
+                        type: isSeries ? 'Series' : 'Movie',
+                        seasons: tmdbData.number_of_seasons || 0,
+                        episodes: tmdbData.number_of_episodes || 0,
+                        length: richRuntime || '',
+                        genre: richGenres || '',
+                        rating: tmdbData.vote_average ? tmdbData.vote_average.toFixed(1).toString() : (selectedObj.rating || ''),
+                        thumbnail: tmdbData.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}` : (selectedObj.i?.imageUrl || '')
+                    });
+                    
+                    setPreview({
+                        title: tmdbData.title || tmdbData.name || selectedObj.l || itemTitle,
+                        type: isSeries ? 'Series' : 'Movie',
+                        thumbnail: tmdbData.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}` : (selectedObj.i?.imageUrl || '')
+                    });
+                } catch (e) {
+                   // Fallback to basic if even details fail
+                   setFormData({
+                       ...formData,
+                       title: selectedObj.l || itemTitle,
+                       type: isSeries ? 'Series' : 'Movie',
+                       rating: selectedObj.rating || '',
+                       thumbnail: selectedObj.i?.imageUrl || ''
+                   });
+                   setPreview({
+                       title: selectedObj.l || itemTitle,
+                       type: isSeries ? 'Series' : 'Movie',
+                       thumbnail: selectedObj.i?.imageUrl || ''
+                   });
+                }
                 setSearchQuery('');
             } else {
                 alert('Failed to fetch data, please enter manually.');
