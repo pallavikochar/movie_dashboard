@@ -209,7 +209,7 @@ export default function Home() {
   const allGenres = useMemo(() => {
     const genres = new Set<string>();
     watchlist.forEach(item => {
-      item.genre.split(',').forEach(g => {
+      (item.genre || '').split(',').forEach(g => {
         const trimmed = g.trim();
         if (trimmed) genres.add(trimmed);
       });
@@ -298,7 +298,7 @@ export default function Home() {
 
     const genres: Record<string, number> = {};
     watchlist.forEach(item => {
-      item.genre.split(',').forEach(g => {
+      (item.genre || '').split(',').forEach(g => {
         const trimmed = g.trim();
         if (trimmed) genres[trimmed] = (genres[trimmed] || 0) + 1;
       });

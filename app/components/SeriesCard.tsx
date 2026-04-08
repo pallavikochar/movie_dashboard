@@ -140,10 +140,12 @@ export default function SeriesCard({ entry, onDelete, onEdit, onStatusChange, is
                 </div>
 
                 <div className="flex flex-wrap gap-1.5 pt-1">
-                    {entry.genre?.split(',').slice(0, 3).map((g, i) => (
-                        <span key={i} className="text-xs px-2 py-0.5 bg-white/5 rounded-full text-slate-400 border border-white/5">
-                            {g.trim()}
-                        </span>
+                    {(entry.genre || '').split(',').slice(0, 3).map((g, i) => (
+                        g.trim() && (
+                            <span key={i} className="text-xs px-2 py-0.5 bg-white/5 rounded-full text-slate-400 border border-white/5">
+                                {g.trim()}
+                            </span>
+                        )
                     ))}
                 </div>
 
