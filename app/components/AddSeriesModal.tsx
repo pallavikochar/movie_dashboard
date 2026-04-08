@@ -80,67 +80,53 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                 return;
             }
         } catch (error) {
-            // Priority 2: Live Proxy Search (GitHub Pages) - Scrape official IMDb search results
+            // Priority 2: Fast IMDb Suggestion API (Live Site Fallback)
             try {
-                const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(`https://www.imdb.com/find?q=${encodeURIComponent(searchQuery)}&s=tt`)}`;
-                const proxyRes = await axios.get(proxyUrl);
-                const html = proxyRes.data.contents;
+                const queryStr = searchQuery.trim().toLowerCase();
+                const firstChar = queryStr.charAt(0).match(/[a-z0-9]/i) ? queryStr.charAt(0) : 'v';
+                const fetchUrl = `https://v3.sg.media-imdb.com/suggestion/${firstChar}/${encodeURIComponent(queryStr)}.json`;
                 
-                const parser = new DOMParser();
-                const doc = parser.parseFromString(html, 'text/html');
-                const items = doc.querySelectorAll('.ipc-metadata-list-summary-item');
+                const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(fetchUrl)}`;
+                const res = await axios.get(proxyUrl);
+                const data = JSON.parse(res.data.contents);
+                const suggestions = data.d || [];
                 
-                const results: any[] = [];
-                items.forEach((item: any) => {
-                    const idLink = item.querySelector('a.ipc-metadata-list-summary-item__t');
-                    const idMatch = idLink?.getAttribute('href')?.match(/\/title\/(tt\d+)\//);
-                    const title = item.querySelector('.ipc-metadata-list-summary-item__t')?.textContent;
-                    const year = item.querySelector('.ipc-metadata-list-summary-item__li')?.textContent;
-                    const rating = item.querySelector('.ipc-rating-star--imdb')?.textContent;
-                    const img = item.querySelector('img.ipc-image')?.getAttribute('src');
-                    
-                    if (idMatch && title) {
-                        results.push({
-                            id: idMatch[1],
-                            l: title.trim(),
-                            y: year?.trim() || '',
-                            q: item.textContent.includes('TV Series') ? 'TV Series' : 'Movie',
-                            rating: rating?.trim() || '',
-                            i: { imageUrl: img || '' },
-                            s: ''
-                        });
-                    }
-                });
+                const mapped = suggestions
+                    .filter((r: any) => r.id && r.id.startsWith('tt'))
+                    .map((r: any) => ({
+                        id: r.id,
+                        l: r.l,
+                        y: r.y || '',
+                        q: r.q || (r.qid === 'tvSeries' ? 'TV Series' : 'Movie'),
+                        i: r.i,
+                        s: r.s || '',
+                        rating: '' // Rating will be synced on select
+                    }));
                 
-                if (results.length > 0) {
-                    setSearchResults(results);
+                if (mapped.length > 0) {
+                    setSearchResults(mapped);
                     return;
                 }
             } catch (fallbackError) {
-                console.warn('Proxy search failed, falling back to TMDb', fallbackError);
+                console.warn('Suggestion API failed');
             }
             
-            // Priority 3: TMDb Search (Third-choice Fallback)
+            // Priority 3: TMDb Search (Safety Net)
             try {
                 const tmdbKey = '15d2ea6d0dc1d476efbca3eba2b9bbfb';
                 const res = await axios.get(`https://api.themoviedb.org/3/search/multi?api_key=${tmdbKey}&query=${encodeURIComponent(searchQuery)}`);
-                const filtered = (res.data.results || []).filter((r: any) => r.media_type === 'movie' || r.media_type === 'tv');
-                if (filtered.length > 0) {
-                    const mapped = filtered.map((r: any) => ({
+                const mapped = (res.data.results || [])
+                    .filter((r: any) => r.media_type === 'movie' || r.media_type === 'tv')
+                    .map((r: any) => ({
                         id: r.id.toString(),
                         l: r.title || r.name,
                         y: (r.release_date || r.first_air_date || '').split('-')[0],
                         q: r.media_type === 'tv' ? 'TV Series' : 'Movie',
-                        s: r.overview || '',
                         i: { imageUrl: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : '' },
                         rating: r.vote_average ? r.vote_average.toFixed(1).toString() : '',
                     }));
-                    setSearchResults(mapped);
-                    return;
-                }
+                setSearchResults(mapped);
             } catch (e) {}
-            
-            alert('No results found on IMDb or TMDb.');
         } finally {
             setLoading(false);
         }
@@ -167,32 +153,36 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
             if (res.data.rating) return res.data.rating.toString();
         } catch (e) { }
 
-        // Strategy B: Multi-Proxy JSON-LD Parsing (Live Site)
+        // Strategy B: Ultra-Lean JSON-LD Scraper (Live Site)
         const proxies = [
-            `https://api.allorigins.win/get?url=${encodeURIComponent(`https://www.imdb.com/title/${imdbId}/`)}`,
-            `https://corsproxy.io/?${encodeURIComponent(`https://www.imdb.com/title/${imdbId}/`)}`
+            `https://api.allorigins.win/get?url=${encodeURIComponent(`https://www.imdb.com/title/${imdbId}/`)}&t=${Date.now()}`
         ];
 
         for (const url of proxies) {
             try {
-                const res = await axios.get(url, { timeout: 7000 });
-                const html = res.data.contents || res.data;
+                const res = await axios.get(url, { timeout: 5000 });
+                const html = res.data.contents;
                 
                 // Extract official JSON-LD block
-                const jsonMatch = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/i);
+                const jsonMatch = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
                 if (jsonMatch) {
-                    try {
-                        const json = JSON.parse(jsonMatch[1]);
-                        const rating = json.aggregateRating?.ratingValue || json.ratingValue;
-                        if (rating) return rating.toString();
-                    } catch (e) {}
+                    const json = JSON.parse(jsonMatch[1]);
+                    const rating = json.aggregateRating?.ratingValue || json.ratingValue;
+                    if (rating) return rating.toString();
                 }
                 
                 // Fallback Regex
-                const regMatch = html.match(/"ratingValue":\s*"([\d.]+)"/i) || html.match(/"ratingValue":\s*([\d.]+)/i);
+                const regMatch = html.match(/"ratingValue":\s*"([\d.]+)"/) || html.match(/"ratingValue":\s*([\d.]+)/);
                 if (regMatch) return regMatch[1];
             } catch (err) { }
         }
+        
+        // Strategy C: TVMaze Fallback (Only for Series on Live Site)
+        try {
+            const titleRes = await axios.get(`https://api.tvmaze.com/lookup/shows?imdb=${imdbId}`);
+            if (titleRes.data.rating?.average) return titleRes.data.rating.average.toString();
+        } catch (e) { }
+
         return null;
     };
 
