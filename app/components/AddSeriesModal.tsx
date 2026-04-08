@@ -125,13 +125,13 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
     const fetchImdbRating = async (imdbId: string): Promise<string | null> => {
         if (!imdbId) return null;
         
-        // Strategy A: Native Scraper (Fastest, Local)
+        // Strategy A: Native Scraper (Local)
         try {
             const res = await axios.get(`/api/scrape?imdbId=${imdbId}`, { timeout: 3000 });
-            if (res.data.rating) return res.data.rating;
+            if (res.data.rating) return res.data.rating.toString();
         } catch (e) { }
 
-        // Strategy B: Multi-Proxy Fallback (Live Site)
+        // Strategy B: Multi-Proxy JSON-LD Parsing (Live Site)
         const proxies = [
             `https://api.allorigins.win/get?url=${encodeURIComponent(`https://www.imdb.com/title/${imdbId}/`)}`,
             `https://corsproxy.io/?${encodeURIComponent(`https://www.imdb.com/title/${imdbId}/`)}`
@@ -139,11 +139,22 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
 
         for (const url of proxies) {
             try {
-                const res = await axios.get(url, { timeout: 6000 });
+                const res = await axios.get(url, { timeout: 7000 });
                 const html = res.data.contents || res.data;
-                const match = html.match(/"aggregateRating":\s*\{[^}]*"ratingValue":\s*"?([\d.]+)"?/i) || 
-                              html.match(/"ratingValue":\s*"?([\d.]+)"?/i);
-                if (match) return match[1];
+                
+                // Extract official JSON-LD block
+                const jsonMatch = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/i);
+                if (jsonMatch) {
+                    try {
+                        const json = JSON.parse(jsonMatch[1]);
+                        const rating = json.aggregateRating?.ratingValue || json.ratingValue;
+                        if (rating) return rating.toString();
+                    } catch (e) {}
+                }
+                
+                // Fallback Regex
+                const regMatch = html.match(/"ratingValue":\s*"([\d.]+)"/i) || html.match(/"ratingValue":\s*([\d.]+)/i);
+                if (regMatch) return regMatch[1];
             } catch (err) { }
         }
         return null;
