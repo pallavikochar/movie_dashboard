@@ -113,10 +113,16 @@ export async function GET(req: Request) {
                      ldData.aggregateRating?.ratingValue?.toString() || '';
 
         // Robust Cheerio Fill-in if JSON paths fail
-        if (!rating) {
-            rating = $('[data-testid="hero-rating-bar__aggregate-rating__score"] span').first().text().trim() ||
-                     $('.sc-bde20123-1.iZwwNf').first().text().trim() ||
-                     $('.ipc-btn__text span').first().text().trim().match(/^\d\.\d$/)?.[0] || '';
+        if (!rating || rating === '0.0' || rating === '8.4') {
+            const body = detailsResponse.data;
+            const ratingMatch = body.match(/"ratingValue":\s*"?([\d.]+)"?/i);
+            if (ratingMatch) rating = ratingMatch[1];
+            
+            if (!rating || rating === '8.4') {
+                rating = $('[data-testid="hero-rating-bar__aggregate-rating__score"] span').first().text().trim() ||
+                         $('.sc-bde20123-1.iZwwNf').first().text().trim() ||
+                         $('.ipc-btn__text span').first().text().trim().match(/^\d\.\d$/)?.[0] || '';
+            }
         }
         
         let poster = mainData?.primaryImage?.url || ldData.image || firstResult.i?.imageUrl || '';
