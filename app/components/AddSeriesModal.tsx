@@ -73,60 +73,25 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
         setLoading(true);
         setSearchResults([]);
         try {
-            // Priority 1: Native Scraper (Local)
-            const res = await axios.get(`/api/scrape?title=${encodeURIComponent(searchQuery)}&list=true`);
-            if (res.data.results) {
-                setSearchResults(res.data.results);
-                return;
-            }
+            // Priority 1: Native Scraper (Local dev server)
+            const res = await axios.get(`/api/scrape?title=${encodeURIComponent(searchQuery)}&list=true`, { timeout: 4000 });
+            const results = res.data.results || [];
+            if (results.length === 0) alert('No results found.');
+            else setSearchResults(results);
         } catch (error) {
-            // Priority 2: Fast IMDb Suggestion API (Live Site Fallback)
+            // Priority 2: IMDb Suggestions API (works directly from browser, no CORS issues)
             try {
-                const queryStr = searchQuery.trim().toLowerCase();
-                const firstChar = queryStr.charAt(0).match(/[a-z0-9]/i) ? queryStr.charAt(0) : 'v';
+                const queryStr = searchQuery.toLowerCase().trim();
+                const firstChar = queryStr.charAt(0).match(/[a-z0-9]/i) ? queryStr.charAt(0) : 'a';
                 const fetchUrl = `https://v3.sg.media-imdb.com/suggestion/${firstChar}/${encodeURIComponent(queryStr)}.json`;
-                
-                const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(fetchUrl)}`;
-                const res = await axios.get(proxyUrl);
-                const data = JSON.parse(res.data.contents);
-                const suggestions = data.d || [];
-                
-                const mapped = suggestions
-                    .filter((r: any) => r.id && r.id.startsWith('tt'))
-                    .map((r: any) => ({
-                        id: r.id,
-                        l: r.l,
-                        y: r.y || '',
-                        q: r.q || (r.qid === 'tvSeries' ? 'TV Series' : 'Movie'),
-                        i: r.i,
-                        s: r.s || '',
-                        rating: '' // Rating will be synced on select
-                    }));
-                
-                if (mapped.length > 0) {
-                    setSearchResults(mapped);
-                    return;
-                }
+                const res = await axios.get(fetchUrl);
+                const results = (res.data.d || []).filter((r: any) => r.id && r.id.startsWith('tt'));
+                if (results.length === 0) alert('No results found.');
+                else setSearchResults(results);
             } catch (fallbackError) {
-                console.warn('Suggestion API failed');
+                console.error('Search failed', fallbackError);
+                alert('Search failed. Please check your connection and try again.');
             }
-            
-            // Priority 3: TMDb Search (Safety Net)
-            try {
-                const tmdbKey = '15d2ea6d0dc1d476efbca3eba2b9bbfb';
-                const res = await axios.get(`https://api.themoviedb.org/3/search/multi?api_key=${tmdbKey}&query=${encodeURIComponent(searchQuery)}`);
-                const mapped = (res.data.results || [])
-                    .filter((r: any) => r.media_type === 'movie' || r.media_type === 'tv')
-                    .map((r: any) => ({
-                        id: r.id.toString(),
-                        l: r.title || r.name,
-                        y: (r.release_date || r.first_air_date || '').split('-')[0],
-                        q: r.media_type === 'tv' ? 'TV Series' : 'Movie',
-                        i: { imageUrl: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : '' },
-                        rating: r.vote_average ? r.vote_average.toFixed(1).toString() : '',
-                    }));
-                setSearchResults(mapped);
-            } catch (e) {}
         } finally {
             setLoading(false);
         }
@@ -153,36 +118,32 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
             if (res.data.rating) return res.data.rating.toString();
         } catch (e) { }
 
-        // Strategy B: Ultra-Lean JSON-LD Scraper (Live Site)
+        // Strategy B: Multi-Proxy JSON-LD Parsing (Live Site)
         const proxies = [
-            `https://api.allorigins.win/get?url=${encodeURIComponent(`https://www.imdb.com/title/${imdbId}/`)}&t=${Date.now()}`
+            `https://api.allorigins.win/get?url=${encodeURIComponent(`https://www.imdb.com/title/${imdbId}/`)}`,
+            `https://corsproxy.io/?${encodeURIComponent(`https://www.imdb.com/title/${imdbId}/`)}`
         ];
 
         for (const url of proxies) {
             try {
-                const res = await axios.get(url, { timeout: 5000 });
-                const html = res.data.contents;
+                const res = await axios.get(url, { timeout: 7000 });
+                const html = res.data.contents || res.data;
                 
                 // Extract official JSON-LD block
-                const jsonMatch = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
+                const jsonMatch = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/i);
                 if (jsonMatch) {
-                    const json = JSON.parse(jsonMatch[1]);
-                    const rating = json.aggregateRating?.ratingValue || json.ratingValue;
-                    if (rating) return rating.toString();
+                    try {
+                        const json = JSON.parse(jsonMatch[1]);
+                        const rating = json.aggregateRating?.ratingValue || json.ratingValue;
+                        if (rating) return rating.toString();
+                    } catch (e) {}
                 }
                 
                 // Fallback Regex
-                const regMatch = html.match(/"ratingValue":\s*"([\d.]+)"/) || html.match(/"ratingValue":\s*([\d.]+)/);
+                const regMatch = html.match(/"ratingValue":\s*"([\d.]+)"/i) || html.match(/"ratingValue":\s*([\d.]+)/i);
                 if (regMatch) return regMatch[1];
             } catch (err) { }
         }
-        
-        // Strategy C: TVMaze Fallback (Only for Series on Live Site)
-        try {
-            const titleRes = await axios.get(`https://api.tvmaze.com/lookup/shows?imdb=${imdbId}`);
-            if (titleRes.data.rating?.average) return titleRes.data.rating.average.toString();
-        } catch (e) { }
-
         return null;
     };
 
@@ -241,9 +202,8 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
             const tmdb = fullRes.data;
 
             const imdbId = tmdb.external_ids?.imdb_id || tmdb.imdb_id || (fetchId.startsWith('tt') ? fetchId : null);
-            let verifiedRating = '';
             
-            // RUNTIME LOGIC: Detect sitcoms and prefer < 30m if 48m finale detected
+            // RUNTIME LOGIC: Detect sitcoms and prefer < 30m over finale lengths
             let finalRuntime = '';
             const runtimes = tmdb.episode_run_time || [];
             if (!isSeries && tmdb.runtime) finalRuntime = `${tmdb.runtime}m`;
@@ -251,11 +211,13 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                 const typical = runtimes.find((r: number) => r > 15 && r < 35);
                 if (typical) finalRuntime = `${typical}m`;
                 else if (runtimes.length > 0) finalRuntime = `${runtimes[0]}m`;
-                else if (tmdb.last_episode_to_air?.runtime < 40) finalRuntime = `${tmdb.last_episode_to_air.runtime}m`;
-                else finalRuntime = '22m'; 
+                else if (tmdb.last_episode_to_air?.runtime && tmdb.last_episode_to_air.runtime < 40) finalRuntime = `${tmdb.last_episode_to_air.runtime}m`;
+                else finalRuntime = '22m';
             }
+
+            // Use verified IMDb rating — fetch it, don't use TMDb's vote_average
+            const verifiedRating = await fetchImdbRating(imdbId || fetchId);
             
-            // Set basic data first (instantly)
             setFormData({
                 ...formData,
                 title: tmdb.name || tmdb.title || itemTitle,
@@ -264,16 +226,9 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                 episodes: tmdb.number_of_episodes || 0,
                 length: formatRuntime(finalRuntime),
                 genre: tmdb.genres?.map((g: any) => g.name).join(', ') || '',
-                rating: verifiedRating || 'Syncing...', // Use search rating if we have it
+                rating: verifiedRating || '',
                 thumbnail: tmdb.poster_path ? `https://image.tmdb.org/t/p/w500${tmdb.poster_path}` : (selectedObj?.i?.imageUrl || '')
             });
-
-            // If we don't have a verified rating yet (e.g. searching via local route without ratings), sync it
-            if (!verifiedRating && imdbId) {
-                const r = await fetchImdbRating(imdbId);
-                if (r) setFormData(prev => ({ ...prev, rating: r }));
-                else if (tmdb.vote_average) setFormData(prev => ({ ...prev, rating: tmdb.vote_average.toFixed(1) }));
-            }
 
             setPreview({
                 title: tmdb.name || tmdb.title || itemTitle,
