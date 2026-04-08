@@ -73,56 +73,106 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
         setLoading(true);
         setSearchResults([]);
         try {
-            const tmdbKey = '15d2ea6d0dc1d476efbca3eba2b9bbfb';
-            const fetchUrl = `https://api.themoviedb.org/3/search/multi?api_key=${tmdbKey}&query=${encodeURIComponent(searchQuery)}`;
-            const res = await axios.get(fetchUrl);
+            // ORIGINAL NATIVE CODE: Works flawlessly when running locally via next.js server
+            const res = await axios.get(`/api/scrape?title=${encodeURIComponent(searchQuery)}&list=true`);
             const results = res.data.results || [];
-            const filtered = results.filter((r: any) => r.media_type === 'movie' || r.media_type === 'tv');
-
-            if (filtered.length === 0) {
-                alert('No results found.');
-            } else {
-                const mapped = filtered.map((r: any) => ({
-                    id: r.id.toString(),
-                    l: r.title || r.name,
-                    y: (r.release_date || r.first_air_date || '').split('-')[0],
-                    q: r.media_type === 'tv' ? 'TV Series' : 'Movie',
-                    s: r.overview || '',
-                    i: { imageUrl: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : '' },
-                    rating: r.vote_average ? r.vote_average.toFixed(1).toString() : '',
-                }));
-                setSearchResults(mapped);
-            }
+            if (results.length === 0) alert('No results found.');
+            else setSearchResults(results);
         } catch (error) {
-            console.error(error);
-            alert('Failed to search natively, please try again.');
+            console.warn('API error (likely GitHub Pages). Falling back to TMDB.');
+            try {
+                const tmdbKey = '15d2ea6d0dc1d476efbca3eba2b9bbfb';
+                const fetchUrl = `https://api.themoviedb.org/3/search/multi?api_key=${tmdbKey}&query=${encodeURIComponent(searchQuery)}`;
+                const res = await axios.get(fetchUrl);
+                const results = res.data.results || [];
+                const filtered = results.filter((r: any) => r.media_type === 'movie' || r.media_type === 'tv');
+
+                if (filtered.length === 0) {
+                    alert('No results found.');
+                } else {
+                    const mapped = filtered.map((r: any) => ({
+                        id: r.id.toString(), // TMDB numerical ID format
+                        l: r.title || r.name,
+                        y: (r.release_date || r.first_air_date || '').split('-')[0],
+                        q: r.media_type === 'tv' ? 'TV Series' : 'Movie',
+                        s: r.overview || '',
+                        i: { imageUrl: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : '' },
+                        rating: r.vote_average ? r.vote_average.toFixed(1).toString() : '',
+                    }));
+                    setSearchResults(mapped);
+                }
+            } catch (fallbackError) {
+                console.error(fallbackError);
+                alert('Failed to search natively, please try again.');
+            }
         } finally {
             setLoading(false);
         }
     };
 
-    const handleSelectResult = async (tmdbId: string, itemTitle: string) => {
+    const handleSelectResult = async (fetchId: string, itemTitle: string) => {
         setLoading(true);
-        const selectedObj = searchResults.find(r => r.id === tmdbId);
+        const selectedObj = searchResults.find(r => r.id === fetchId);
         setSearchResults([]);
         
+        // 1. If it's a native IMDB ID (starts with tt), we use the original native scraper first!
+        if (fetchId.startsWith('tt')) {
+            try {
+                const res = await axios.get(`/api/scrape?imdbId=${encodeURIComponent(fetchId)}`);
+                const data = res.data;
+
+                setFormData({
+                    ...formData,
+                    title: data.title || itemTitle,
+                    type: data.type || formData.type,
+                    seasons: data.seasons || 0,
+                    episodes: data.episodes || 0,
+                    length: data.runtime || '',
+                    genre: data.genres || '',
+                    rating: data.rating || '',
+                    thumbnail: data.poster || '',
+                });
+
+                setPreview(data);
+                setSearchQuery('');
+                setLoading(false);
+                return;
+            } catch (error) {
+                console.warn('Native scrape failed, degrading');
+            }
+        }
+
+        // 2. Either the Github Pages fallback triggered OR we explicitly are using TMDB numerical IDs
         try {
-            const isSeries = selectedObj?.q === 'TV Series';
+            const isSeries = selectedObj?.q === 'TV Series' || (selectedObj?.q || '').includes('Series');
             const tmdbKey = '15d2ea6d0dc1d476efbca3eba2b9bbfb';
-            const endpoint = isSeries ? `tv/${tmdbId}` : `movie/${tmdbId}`;
             
-            const customRes = await axios.get(`https://api.themoviedb.org/3/${endpoint}?api_key=${tmdbKey}`);
-            const tmdbData = customRes.data;
+            // Note: If fetchId starts with 'tt', we can actually use it as the `find` endpoint in TMDB!
+            // But since our Github pages fallback already maps TMDB ids natively, we just use the numerical ID.
+            let endpoint = isSeries ? `tv/${fetchId}` : `movie/${fetchId}`;
+            let apiFetchUrl = `https://api.themoviedb.org/3/${endpoint}?api_key=${tmdbKey}`;
             
-            const richGenres = tmdbData.genres ? tmdbData.genres.map((g: any) => g.name).join(', ') : '';
+            if (fetchId.startsWith('tt')) {
+                 apiFetchUrl = `https://api.themoviedb.org/3/find/${fetchId}?api_key=${tmdbKey}&external_source=imdb_id`;
+            }
+
+            const customRes = await axios.get(apiFetchUrl);
+            let tmdbData = fetchId.startsWith('tt') ? (customRes.data.tv_results?.[0] || customRes.data.movie_results?.[0]) : customRes.data;
+            
+            // Re-fetch specifics if we used find (to get episodes/seasons)
+            if (fetchId.startsWith('tt') && tmdbData) {
+                const specificRes = await axios.get(`https://api.themoviedb.org/3/${isSeries ? 'tv' : 'movie'}/${tmdbData.id}?api_key=${tmdbKey}`);
+                tmdbData = specificRes.data;
+            }
+
+            const richGenres = tmdbData?.genres ? tmdbData.genres.map((g: any) => g.name).join(', ') : '';
             let richRuntime = '';
-            if (!isSeries && tmdbData.runtime) richRuntime = `${tmdbData.runtime}m`;
-            if (isSeries && tmdbData.episode_run_time && tmdbData.episode_run_time.length > 0) richRuntime = `${tmdbData.episode_run_time[0]}m`;
+            if (!isSeries && tmdbData?.runtime) richRuntime = `${tmdbData.runtime}m`;
+            if (isSeries && tmdbData?.episode_run_time && tmdbData.episode_run_time.length > 0) richRuntime = `${tmdbData.episode_run_time[0]}m`;
             
-            // TVMaze fallback for missing TMDB properties on series (e.g. GoT has empty episode_run_time array natively in TMDB)
             if (isSeries && !richRuntime) {
                 try {
-                    const tvm = await axios.get(`https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(tmdbData.name || itemTitle)}`);
+                    const tvm = await axios.get(`https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(tmdbData?.name || itemTitle)}`);
                     if (tvm.data && (tvm.data.averageRuntime || tvm.data.runtime)) {
                         richRuntime = `${tvm.data.averageRuntime || tvm.data.runtime}m`;
                     }
@@ -131,26 +181,26 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
 
             setFormData({
                 ...formData,
-                title: tmdbData.title || tmdbData.name || selectedObj?.l || itemTitle,
+                title: tmdbData?.title || tmdbData?.name || selectedObj?.l || itemTitle,
                 type: isSeries ? 'Series' : 'Movie',
-                seasons: tmdbData.number_of_seasons || 0,
-                episodes: tmdbData.number_of_episodes || 0,
+                seasons: tmdbData?.number_of_seasons || 0,
+                episodes: tmdbData?.number_of_episodes || 0,
                 length: richRuntime || '',
                 genre: richGenres || '',
-                rating: tmdbData.vote_average ? tmdbData.vote_average.toFixed(1).toString() : (selectedObj?.rating || ''),
-                thumbnail: tmdbData.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}` : (selectedObj?.i?.imageUrl || '')
+                rating: tmdbData?.vote_average ? tmdbData.vote_average.toFixed(1).toString() : (selectedObj?.rating || ''),
+                thumbnail: tmdbData?.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}` : (selectedObj?.i?.imageUrl || '')
             });
             
             setPreview({
-                title: tmdbData.title || tmdbData.name || selectedObj?.l || itemTitle,
+                title: tmdbData?.title || tmdbData?.name || selectedObj?.l || itemTitle,
                 type: isSeries ? 'Series' : 'Movie',
-                thumbnail: tmdbData.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}` : (selectedObj?.i?.imageUrl || '')
+                thumbnail: tmdbData?.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}` : (selectedObj?.i?.imageUrl || '')
             });
             setSearchQuery('');
         } catch (error) {
             console.error(error);
             if (selectedObj) {
-                const isSeries = selectedObj.q === 'TV Series';
+                const isSeries = selectedObj.q === 'TV Series' || (selectedObj.q || '').includes('Series');
                 setFormData({
                     ...formData,
                     title: selectedObj.l || itemTitle,
@@ -165,7 +215,7 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                 });
                 setSearchQuery('');
             } else {
-                alert('Failed to fetch rich data, please enter manually.');
+                alert('Failed to fetch data, please enter manually.');
             }
         } finally {
             setLoading(false);
