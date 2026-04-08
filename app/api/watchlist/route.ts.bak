@@ -1,0 +1,90 @@
+
+import { NextResponse } from 'next/server';
+import { supabase } from '@/app/lib/supabase';
+import { WatchlistEntry } from '@/app/types';
+
+export async function GET() {
+    const { data, error } = await supabase
+        .from('watchlist')
+        .select('*')
+        .order('createdAt', { ascending: false });
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json(data);
+}
+
+export async function POST(req: Request) {
+    try {
+        const body = await req.json();
+
+        // Check if title already exists (case-insensitive)
+        const { data: existing } = await supabase
+            .from('watchlist')
+            .select('id')
+            .ilike('title', body.title)
+            .single();
+
+        if (existing) {
+            return NextResponse.json({ error: 'This title already exists in your library.' }, { status: 400 });
+        }
+
+        const newEntry = {
+            id: crypto.randomUUID(),
+            title: body.title,
+            type: body.type,
+            seasons: body.seasons || 0,
+            episodes: body.episodes || 0,
+            length: body.length || '',
+            genre: body.genre || '',
+            rating: body.rating || '',
+            finishedDate: body.finishedDate || '',
+            thumbnail: body.thumbnail || '',
+            status: body.status || 'Watching',
+            review: body.review || '',
+            createdAt: new Date().toISOString()
+        };
+
+        const { error } = await supabase.from('watchlist').insert([newEntry]);
+        if (error) throw error;
+
+        return NextResponse.json(newEntry);
+    } catch (error: any) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+}
+
+export async function PUT(req: Request) {
+    try {
+        const body = await req.json();
+        const { id, updates } = body;
+
+        const { data, error } = await supabase
+            .from('watchlist')
+            .update(updates)
+            .eq('id', id)
+            .select()
+            .single();
+
+        if (error) throw error;
+        return NextResponse.json(data);
+    } catch (error: any) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+}
+
+export async function DELETE(req: Request) {
+    try {
+        const body = await req.json();
+        const { id } = body;
+
+        const { error } = await supabase
+            .from('watchlist')
+            .delete()
+            .eq('id', id);
+
+        if (error) throw error;
+        return NextResponse.json({ success: true });
+    } catch (error: any) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+}
