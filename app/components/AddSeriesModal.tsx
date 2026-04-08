@@ -69,47 +69,61 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
     if (!isOpen) return null;
 
     const handleFetch = async () => {
-        if (!searchQuery) return;
+        if (!searchQuery.trim()) return;
         setLoading(true);
         setSearchResults([]);
         try {
-            // ORIGINAL NATIVE CODE: Works flawlessly when running locally via next.js server
+            // Priority 1: Native Scraper (Local)
             const res = await axios.get(`/api/scrape?title=${encodeURIComponent(searchQuery)}&list=true`);
-            const results = res.data.results || [];
-            if (results.length === 0) alert('No results found.');
-            else setSearchResults(results);
+            if (res.data.results) {
+                setSearchResults(res.data.results);
+                return;
+            }
         } catch (error) {
-            console.warn('API error (likely GitHub Pages). Falling back to TMDB.');
+            // Priority 2: Live Proxy Search (GitHub Pages) - Scrape official IMDb search results
             try {
-                const tmdbKey = '15d2ea6d0dc1d476efbca3eba2b9bbfb';
-                const fetchUrl = `https://api.themoviedb.org/3/search/multi?api_key=${tmdbKey}&query=${encodeURIComponent(searchQuery)}`;
-                const res = await axios.get(fetchUrl);
-                const results = res.data.results || [];
-                const filtered = results.filter((r: any) => r.media_type === 'movie' || r.media_type === 'tv');
-
-                if (filtered.length === 0) {
-                    alert('No results found.');
-                } else {
-                    const mapped = filtered.map((r: any) => ({
-                        id: r.id.toString(),
-                        imdbId: r.id.toString(), // We'll try to resolve this
-                        l: r.title || r.name,
-                        y: (r.release_date || r.first_air_date || '').split('-')[0],
-                        q: r.media_type === 'tv' ? 'TV Series' : 'Movie',
-                        s: r.overview || '',
-                        i: { imageUrl: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : '' },
-                        rating: r.vote_average ? r.vote_average.toFixed(1).toString() : '',
-                    }));
-                    setSearchResults(mapped);
+                const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(`https://www.imdb.com/find?q=${encodeURIComponent(searchQuery)}&s=tt`)}`;
+                const proxyRes = await axios.get(proxyUrl);
+                const html = proxyRes.data.contents;
+                
+                // Regex for IMDb search items in the current layout
+                const results: any[] = [];
+                const itemMatches = html.matchAll(/<li[^>]*class="[^"]*ipc-metadata-list-summary-item[^"]*"[^>]*>([\s\S]*?)<\/li>/gi);
+                
+                for (const match of itemMatches) {
+                    const block = match[1];
+                    const idMatch = block.match(/href="\/title\/(tt\d+)\//i);
+                    const titleMatch = block.match(/class="[^"]*ipc-metadata-list-summary-item__t[^"]*"[^>]*>([^<]+)/i);
+                    const yearMatch = block.match(/class="[^"]*ipc-metadata-list-summary-item__li[^"]*"[^>]*>([^<]+)/i);
+                    const ratingMatch = block.match(/aria-label="IMDb rating: ([\d.]+)"/i) || block.match(/class="[^"]*ipc-rating-star--imdb[^"]*"[^>]*>([\d.]+)/i);
+                    const thumbMatch = block.match(/src="([^"]+)"/i);
+                    
+                    if (idMatch && titleMatch) {
+                        results.push({
+                            id: idMatch[1],
+                            l: titleMatch[1],
+                            y: yearMatch ? yearMatch[1] : '',
+                            q: block.includes('TV Series') ? 'TV Series' : 'Movie',
+                            rating: ratingMatch ? ratingMatch[1] : '',
+                            i: { imageUrl: thumbMatch ? thumbMatch[1] : '' },
+                            s: '' // We'll get cast later if needed
+                        });
+                    }
+                    if (results.length >= 8) break;
+                }
+                
+                if (results.length > 0) {
+                    setSearchResults(results);
+                    return;
                 }
             } catch (fallbackError) {
-                console.error(fallbackError);
-                alert('Failed to search natively, please try again.');
+                console.warn('Proxy search failed', fallbackError);
             }
         } finally {
             setLoading(false);
         }
     };
+
     const formatRuntime = (minutesStr: string | number) => {
         if (!minutesStr) return '';
         const strVal = String(minutesStr);
@@ -229,7 +243,7 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                 else finalRuntime = '22m'; 
             }
             
-            // Set basic data first (instantly) but leave rating empty for syncing
+            // Set basic data first (instantly)
             setFormData({
                 ...formData,
                 title: tmdb.name || tmdb.title || itemTitle,
@@ -238,14 +252,15 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                 episodes: tmdb.number_of_episodes || 0,
                 length: formatRuntime(finalRuntime),
                 genre: tmdb.genres?.map((g: any) => g.name).join(', ') || '',
-                rating: 'Syncing...', // Clear visual indicator
+                rating: verifiedRating || 'Syncing...', // Use search rating if we have it
                 thumbnail: tmdb.poster_path ? `https://image.tmdb.org/t/p/w500${tmdb.poster_path}` : (selectedObj?.i?.imageUrl || '')
             });
 
-            // Start High-Fidelity Sync
-            if (imdbId) {
-                verifiedRating = await fetchImdbRating(imdbId) || '';
-                setFormData(prev => ({ ...prev, rating: verifiedRating || tmdb.vote_average?.toFixed(1) || '' }));
+            // If we don't have a verified rating yet (e.g. searching via local route without ratings), sync it
+            if (!verifiedRating && imdbId) {
+                const r = await fetchImdbRating(imdbId);
+                if (r) setFormData(prev => ({ ...prev, rating: r }));
+                else if (tmdb.vote_average) setFormData(prev => ({ ...prev, rating: tmdb.vote_average.toFixed(1) }));
             }
 
             setPreview({
