@@ -91,7 +91,8 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                     alert('No results found.');
                 } else {
                     const mapped = filtered.map((r: any) => ({
-                        id: r.id.toString(), // TMDB numerical ID format
+                        id: r.id.toString(),
+                        imdbId: r.id.toString(), // We'll try to resolve this
                         l: r.title || r.name,
                         y: (r.release_date || r.first_air_date || '').split('-')[0],
                         q: r.media_type === 'tv' ? 'TV Series' : 'Movie',
@@ -123,30 +124,26 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
 
     const fetchImdbRating = async (imdbId: string): Promise<string | null> => {
         if (!imdbId) return null;
+        
+        // Strategy A: Native Scraper (Fastest, Local)
         try {
-            // STEP 1: REST API (Local Next.js Server) - HIGH FIDELITY
-            const nativeRes = await axios.get(`/api/scrape?imdbId=${imdbId}`, { timeout: 4000 });
-            if (nativeRes.data.rating) return nativeRes.data.rating;
-        } catch (e) {
-            // STEP 2: CORS PROXY (Live GitHub Pages) - FALLBACK SCRAPER
+            const res = await axios.get(`/api/scrape?imdbId=${imdbId}`, { timeout: 3000 });
+            if (res.data.rating) return res.data.rating;
+        } catch (e) { }
+
+        // Strategy B: Multi-Proxy Fallback (Live Site)
+        const proxies = [
+            `https://api.allorigins.win/get?url=${encodeURIComponent(`https://www.imdb.com/title/${imdbId}/`)}`,
+            `https://corsproxy.io/?${encodeURIComponent(`https://www.imdb.com/title/${imdbId}/`)}`
+        ];
+
+        for (const url of proxies) {
             try {
-                // We use multiple patterns to find that 8.9 / 8.8 / 7.5
-                const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(`https://www.imdb.com/title/${imdbId}/`)}`;
-                const res = await axios.get(proxyUrl, { timeout: 10000 });
-                const html = res.data.contents;
-                
-                // Primary: JSON-LD ratingValue inside aggregateRating
-                const ldMatch = html.match(/"aggregateRating":\s*\{[^}]*"ratingValue":\s*"?([\d.]+)"?/i) ||
-                                html.match(/"ratingValue":\s*"?([\d.]+)"?/i);
-                if (ldMatch) return ldMatch[1];
-                
-                // Secondary: Next.js script data
-                const nextMatch = html.match(/"rating":\s*"?([\d.]+)"?/i);
-                if (nextMatch) return nextMatch[1];
-                
-                // Tertiary: Visual /10 text
-                const scoreMatch = html.match(/([\d\.]+)\/10/);
-                if (scoreMatch) return scoreMatch[1];
+                const res = await axios.get(url, { timeout: 6000 });
+                const html = res.data.contents || res.data;
+                const match = html.match(/"aggregateRating":\s*\{[^}]*"ratingValue":\s*"?([\d.]+)"?/i) || 
+                              html.match(/"ratingValue":\s*"?([\d.]+)"?/i);
+                if (match) return match[1];
             } catch (err) { }
         }
         return null;
@@ -206,23 +203,26 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
             const fullRes = await axios.get(`https://api.themoviedb.org/3/${isSeries ? 'tv' : 'movie'}/${baseData.id}?api_key=${tmdbKey}&append_to_response=external_ids`);
             const tmdb = fullRes.data;
 
-            // IMDB SYNC (Wait for it or background it)
             const imdbId = tmdb.external_ids?.imdb_id || tmdb.imdb_id || (fetchId.startsWith('tt') ? fetchId : null);
             let verifiedRating = '';
-            if (imdbId) verifiedRating = await fetchImdbRating(imdbId) || '';
+            if (imdbId) {
+                verifiedRating = await fetchImdbRating(imdbId) || '';
+            }
 
             // RUNTIME LOGIC: Detect sitcoms and prefer < 30m if 48m finale detected
             let finalRuntime = '';
             const runtimes = tmdb.episode_run_time || [];
             if (!isSeries && tmdb.runtime) finalRuntime = `${tmdb.runtime}m`;
             else if (isSeries) {
-                // If the first runtime is 48 but it's a series like Friends/Sitcom, we look for 22
                 const typical = runtimes.find((r: number) => r > 15 && r < 35);
                 if (typical) finalRuntime = `${typical}m`;
                 else if (runtimes.length > 0) finalRuntime = `${runtimes[0]}m`;
                 else if (tmdb.last_episode_to_air?.runtime < 40) finalRuntime = `${tmdb.last_episode_to_air.runtime}m`;
-                else finalRuntime = '22m'; // Hard fallback for known sitcom formats if others fail
+                else finalRuntime = '22m'; 
             }
+
+            // FINAL MERGE: NEVER use TMDB 8.4 if we are waiting for a verified IMDb score
+            const initialRating = verifiedRating || (tmdb.vote_average ? tmdb.vote_average.toFixed(1) : '');
 
             setFormData({
                 ...formData,
@@ -232,7 +232,7 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                 episodes: tmdb.number_of_episodes || 0,
                 length: formatRuntime(finalRuntime),
                 genre: tmdb.genres?.map((g: any) => g.name).join(', ') || '',
-                rating: verifiedRating || (tmdb.vote_average ? tmdb.vote_average.toFixed(1) : ''),
+                rating: initialRating,
                 thumbnail: tmdb.poster_path ? `https://image.tmdb.org/t/p/w500${tmdb.poster_path}` : (selectedObj?.i?.imageUrl || '')
             });
 
@@ -241,6 +241,13 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                 type: isSeries ? 'Series' : 'Movie',
                 thumbnail: tmdb.poster_path ? `https://image.tmdb.org/t/p/w500${tmdb.poster_path}` : (selectedObj?.i?.imageUrl || '')
             });
+
+            // If we are still missing the verified rating, try one last time in the background
+            if (!verifiedRating && imdbId) {
+                fetchImdbRating(imdbId).then(r => {
+                    if (r) setFormData(prev => ({ ...prev, rating: r }));
+                });
+            }
 
             setSearchQuery('');
         } catch (error) {
