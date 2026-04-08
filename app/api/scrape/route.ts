@@ -136,6 +136,18 @@ export async function GET(req: Request) {
 
         const releaseYear = mainData?.releaseYear?.year || firstResult.y || '';
         let runtime = mainData?.runtime?.displayableProperty?.value?.plainText || '';
+        
+        // Refined Runtime Extraction for Sitcoms
+        if (!runtime || runtime.includes('h')) {
+             $('[data-testid="hero-title-block__metadata"] li').each((i, el) => {
+                const text = $(el).text().trim();
+                // If we see something like "22m" in the metadata list, it's usually the real episode length
+                if (text.match(/^\d+m$/)) {
+                    runtime = text;
+                }
+            });
+        }
+
         let seasons = 0;
         let episodes = 0;
 
@@ -155,8 +167,11 @@ export async function GET(req: Request) {
                     }
                     if (tvData.genres && tvData.genres.length > 0 && genres.length === 0) genres = tvData.genres;
                     if ((tvData.image?.original || tvData.image?.medium) && !poster) poster = tvData.image.original || tvData.image.medium;
-                    if (tvData.runtime && !runtime) runtime = `${tvData.runtime}m`;
-
+                    
+                    // TVMaze averageRuntime is usually the most accurate for sitcoms (e.g., 22m)
+                    if (tvData.averageRuntime) runtime = `${tvData.averageRuntime}m`;
+                    else if (tvData.runtime && !runtime) runtime = `${tvData.runtime}m`;
+ 
                     if (tvData._embedded?.episodes) {
                         const eps = tvData._embedded.episodes;
                         episodes = eps.length;
