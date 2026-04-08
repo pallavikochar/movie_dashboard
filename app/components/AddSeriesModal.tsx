@@ -118,6 +118,16 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
             let richRuntime = '';
             if (!isSeries && tmdbData.runtime) richRuntime = `${tmdbData.runtime}m`;
             if (isSeries && tmdbData.episode_run_time && tmdbData.episode_run_time.length > 0) richRuntime = `${tmdbData.episode_run_time[0]}m`;
+            
+            // TVMaze fallback for missing TMDB properties on series (e.g. GoT has empty episode_run_time array natively in TMDB)
+            if (isSeries && !richRuntime) {
+                try {
+                    const tvm = await axios.get(`https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(tmdbData.name || itemTitle)}`);
+                    if (tvm.data && (tvm.data.averageRuntime || tvm.data.runtime)) {
+                        richRuntime = `${tvm.data.averageRuntime || tvm.data.runtime}m`;
+                    }
+                } catch (e) { }
+            }
 
             setFormData({
                 ...formData,
