@@ -62,9 +62,30 @@ export default function Home() {
       const res = await axios.get('/api/watchlist').catch(async () => {
           return await axios.get('/movie_dashboard/data/watchlist.json');
       });
-      setWatchlist(res.data);
+      let baseData = res.data || [];
+      
+      try {
+          const localOverrides = localStorage.getItem('local_watchlist_overrides');
+          if (localOverrides) {
+              const parsed = JSON.parse(localOverrides);
+              // Merge local overrides with fetched data (replacing matches, appending new)
+              const merged = [...baseData];
+              parsed.forEach((localItem: any) => {
+                  const idx = merged.findIndex(i => i.id === localItem.id);
+                  if (idx >= 0) merged[idx] = localItem;
+                  else merged.push(localItem);
+              });
+              baseData = merged;
+          }
+      } catch (e) {}
+
+      setWatchlist(baseData);
     } catch (error) {
       console.error('Failed to load watchlist', error);
+      try {
+          const local = localStorage.getItem('local_watchlist_overrides');
+          if (local) setWatchlist(JSON.parse(local));
+      } catch (e) {}
     }
   };
 
@@ -96,10 +117,27 @@ export default function Home() {
       setEditingEntry(null);
       setIsModalOpen(false); // Close modal on success
     } catch (error: any) {
-      console.error(error);
-      const message = error.response?.data?.error || 'Failed to save entry';
-      alert(message);
-      throw error;
+      console.warn("API write failed. Storing seamlessly to Local Storage for Git Pages.");
+      const submissionId = isUpdate ? (entry as WatchlistEntry).id : crypto.randomUUID();
+      const finalEntry = { ...entry, id: submissionId };
+      
+      const updatedList = [...watchlist];
+      const existingIdx = updatedList.findIndex(i => i.id === submissionId);
+      if (existingIdx >= 0) updatedList[existingIdx] = finalEntry as WatchlistEntry;
+      else updatedList.push(finalEntry as WatchlistEntry);
+      
+      try {
+          const storedStr = localStorage.getItem('local_watchlist_overrides');
+          const stored = storedStr ? JSON.parse(storedStr) : [];
+          const storedIdx = stored.findIndex((i: any) => i.id === submissionId);
+          if (storedIdx >= 0) stored[storedIdx] = finalEntry;
+          else stored.push(finalEntry);
+          localStorage.setItem('local_watchlist_overrides', JSON.stringify(stored));
+      } catch (e) {}
+      
+      setWatchlist(updatedList);
+      setEditingEntry(null);
+      setIsModalOpen(false);
     }
   };
 
@@ -118,7 +156,16 @@ export default function Home() {
       await axios.delete('/api/watchlist', { data: { id: confirmDeleteId } });
       setWatchlist(watchlist.filter(w => w.id !== confirmDeleteId));
     } catch (error) {
-      console.error(error);
+      console.warn("Local Delete fallback executing.");
+      const updated = watchlist.filter(w => w.id !== confirmDeleteId);
+      setWatchlist(updated);
+      try {
+          const storedStr = localStorage.getItem('local_watchlist_overrides');
+          if (storedStr) {
+              const stored = JSON.parse(storedStr).filter((w: any) => w.id !== confirmDeleteId);
+              localStorage.setItem('local_watchlist_overrides', JSON.stringify(stored));
+          }
+      } catch(e) {}
     } finally {
       setConfirmDeleteId(null);
     }
@@ -134,10 +181,28 @@ export default function Home() {
       } else {
         updates.finishedDate = '';
       }
-      await axios.put('/api/watchlist', { id, updates });
+      
+      const item = watchlist.find(w => w.id === id);
+      if (!item) return;
+      const newEntry = { ...item, ...updates };
+
+      await axios.put('/api/watchlist', { id, updates }).catch((e) => {
+          console.warn("Status change relying on Local Storage fallback.");
+          const updatedList = watchlist.map(w => w.id === id ? newEntry : w);
+          try {
+              const storedStr = localStorage.getItem('local_watchlist_overrides');
+              const stored = storedStr ? JSON.parse(storedStr) : [];
+              const storedIdx = stored.findIndex((i: any) => i.id === id);
+              if (storedIdx >= 0) stored[storedIdx] = newEntry;
+              else stored.push(newEntry);
+              localStorage.setItem('local_watchlist_overrides', JSON.stringify(stored));
+          } catch(err) {}
+          setWatchlist(updatedList);
+          throw e; // Break standard execution sequence
+      });
       fetchWatchlist();
     } catch (error) {
-      console.error(error);
+      // Intentionally consumed error to allow local fallback without crashing UI
     }
   };
 
