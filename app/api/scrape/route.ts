@@ -108,8 +108,17 @@ export async function GET(req: Request) {
 
         // 1. Initial State from Suggestion API & JSON-LD
         let title = mainData?.titleText?.text || ldData.name || firstResult.l || '';
-        let rating = mainData?.ratingsSummary?.aggregateRating?.toString() ||
-            ldData.aggregateRating?.ratingValue?.toString() || '';
+        
+        let rating = mainData?.ratingsSummary?.aggregateRating?.toString() || 
+                     ldData.aggregateRating?.ratingValue?.toString() || '';
+
+        // Robust Cheerio Fill-in if JSON paths fail
+        if (!rating) {
+            rating = $('[data-testid="hero-rating-bar__aggregate-rating__score"] span').first().text().trim() ||
+                     $('.sc-bde20123-1.iZwwNf').first().text().trim() ||
+                     $('.ipc-btn__text span').first().text().trim().match(/^\d\.\d$/)?.[0] || '';
+        }
+        
         let poster = mainData?.primaryImage?.url || ldData.image || firstResult.i?.imageUrl || '';
         let plot = mainData?.plot?.plotText?.plainText || ldData.description || '';
         let genres: string[] = [];
