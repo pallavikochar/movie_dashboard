@@ -113,9 +113,10 @@ export async function GET(req: Request) {
                      ldData.aggregateRating?.ratingValue?.toString() || '';
 
         // Robust Cheerio Fill-in if JSON paths fail
-        if (!rating || rating === '0.0' || rating === '8.4') {
+        if (!rating || rating === '0.0' || rating === '8.4' || rating === '8' || rating === '7.0') {
             const body = detailsResponse.data;
-            const ratingMatch = body.match(/"ratingValue":\s*"?([\d.]+)"?/i);
+            const ratingMatch = body.match(/"aggregateRating":\s*\{[^}]*"ratingValue":\s*"?([\d.]+)"?/i) || 
+                               body.match(/"ratingValue":\s*"?([\d.]+)"?/i);
             if (ratingMatch) rating = ratingMatch[1];
             
             if (!rating || rating === '8.4') {

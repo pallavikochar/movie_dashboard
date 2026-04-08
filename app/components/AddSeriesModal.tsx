@@ -135,12 +135,13 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                 const res = await axios.get(proxyUrl, { timeout: 10000 });
                 const html = res.data.contents;
                 
-                // Primary: JSON-LD ratingValue
-                const ldMatch = html.match(/"ratingValue":\s*"?([\d.]+)"?/i);
+                // Primary: JSON-LD ratingValue inside aggregateRating
+                const ldMatch = html.match(/"aggregateRating":\s*\{[^}]*"ratingValue":\s*"?([\d.]+)"?/i) ||
+                                html.match(/"ratingValue":\s*"?([\d.]+)"?/i);
                 if (ldMatch) return ldMatch[1];
                 
                 // Secondary: Next.js script data
-                const nextMatch = html.match(/"aggregateRating":\s*([\d.]+)/i);
+                const nextMatch = html.match(/"rating":\s*"?([\d.]+)"?/i);
                 if (nextMatch) return nextMatch[1];
                 
                 // Tertiary: Visual /10 text
