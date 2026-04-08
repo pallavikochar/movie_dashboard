@@ -78,16 +78,28 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
             if (results.length === 0) alert('No results found.');
             else setSearchResults(results);
         } catch (error) {
-            console.warn('API error (likely GitHub Pages). Falling back to direct IMDB Suggestions API.');
+            console.warn('API error (likely GitHub Pages). Falling back to TMDB.');
             try {
-                const queryStr = encodeURIComponent(searchQuery).toLowerCase();
-                const firstChar = queryStr.charAt(0).match(/[a-z0-9]/i) ? queryStr.charAt(0) : 'v';
-                const fetchUrl = `https://v3.sg.media-imdb.com/suggestion/${firstChar}/${queryStr}.json`;
+                const tmdbKey = '15d2ea6d0dc1d476efbca3eba2b9bbfb';
+                const fetchUrl = `https://api.themoviedb.org/3/search/multi?api_key=${tmdbKey}&query=${encodeURIComponent(searchQuery)}`;
                 const res = await axios.get(fetchUrl);
-                const results = res.data.d || [];
-                const filtered = results.filter((r: any) => r.id && r.id.startsWith('tt'));
-                if (filtered.length === 0) alert('No results found.');
-                else setSearchResults(filtered);
+                const results = res.data.results || [];
+                const filtered = results.filter((r: any) => r.media_type === 'movie' || r.media_type === 'tv');
+
+                if (filtered.length === 0) {
+                    alert('No results found.');
+                } else {
+                    const mapped = filtered.map((r: any) => ({
+                        id: r.id.toString(),
+                        l: r.title || r.name,
+                        y: (r.release_date || r.first_air_date || '').split('-')[0],
+                        q: r.media_type === 'tv' ? 'TV Series' : 'Movie',
+                        s: r.overview || '',
+                        i: { imageUrl: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : '' },
+                        rating: r.vote_average ? r.vote_average.toFixed(1).toString() : '',
+                    }));
+                    setSearchResults(mapped);
+                }
             } catch (fallbackError) {
                 console.error(fallbackError);
                 alert('Failed to search natively, please try again.');
@@ -123,12 +135,12 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
         } catch (error) {
             console.warn('API fetch failed, populating partial known metrics');
             if (selectedObj) {
-                const titleType = selectedObj.q || '';
-                const isSeries = titleType.toLowerCase().includes('series') || titleType.toLowerCase().includes('tv') || (selectedObj.qid || '').toLowerCase().includes('tv');
+                const isSeries = selectedObj.q === 'TV Series';
                 setFormData({
                     ...formData,
                     title: selectedObj.l || itemTitle,
                     type: isSeries ? 'Series' : 'Movie',
+                    rating: selectedObj.rating || '',
                     thumbnail: selectedObj.i?.imageUrl || ''
                 });
                 setPreview({
