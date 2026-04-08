@@ -205,10 +205,7 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
 
             const imdbId = tmdb.external_ids?.imdb_id || tmdb.imdb_id || (fetchId.startsWith('tt') ? fetchId : null);
             let verifiedRating = '';
-            if (imdbId) {
-                verifiedRating = await fetchImdbRating(imdbId) || '';
-            }
-
+            
             // RUNTIME LOGIC: Detect sitcoms and prefer < 30m if 48m finale detected
             let finalRuntime = '';
             const runtimes = tmdb.episode_run_time || [];
@@ -220,10 +217,8 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                 else if (tmdb.last_episode_to_air?.runtime < 40) finalRuntime = `${tmdb.last_episode_to_air.runtime}m`;
                 else finalRuntime = '22m'; 
             }
-
-            // FINAL MERGE: NEVER use TMDB 8.4 if we are waiting for a verified IMDb score
-            const initialRating = verifiedRating || (tmdb.vote_average ? tmdb.vote_average.toFixed(1) : '');
-
+            
+            // Set basic data first (instantly) but leave rating empty for syncing
             setFormData({
                 ...formData,
                 title: tmdb.name || tmdb.title || itemTitle,
@@ -232,22 +227,21 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                 episodes: tmdb.number_of_episodes || 0,
                 length: formatRuntime(finalRuntime),
                 genre: tmdb.genres?.map((g: any) => g.name).join(', ') || '',
-                rating: initialRating,
+                rating: 'Syncing...', // Clear visual indicator
                 thumbnail: tmdb.poster_path ? `https://image.tmdb.org/t/p/w500${tmdb.poster_path}` : (selectedObj?.i?.imageUrl || '')
             });
+
+            // Start High-Fidelity Sync
+            if (imdbId) {
+                verifiedRating = await fetchImdbRating(imdbId) || '';
+                setFormData(prev => ({ ...prev, rating: verifiedRating || tmdb.vote_average?.toFixed(1) || '' }));
+            }
 
             setPreview({
                 title: tmdb.name || tmdb.title || itemTitle,
                 type: isSeries ? 'Series' : 'Movie',
                 thumbnail: tmdb.poster_path ? `https://image.tmdb.org/t/p/w500${tmdb.poster_path}` : (selectedObj?.i?.imageUrl || '')
             });
-
-            // If we are still missing the verified rating, try one last time in the background
-            if (!verifiedRating && imdbId) {
-                fetchImdbRating(imdbId).then(r => {
-                    if (r) setFormData(prev => ({ ...prev, rating: r }));
-                });
-            }
 
             setSearchQuery('');
         } catch (error) {
