@@ -110,6 +110,16 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
         }
     };
 
+    const formatRuntime = (minutesStr: string | number) => {
+        if (!minutesStr) return '';
+        const mins = parseInt(String(minutesStr).replace(/[^0-9]/g, ''));
+        if (isNaN(mins) || mins === 0) return '';
+        if (mins < 60) return `${mins}m`;
+        const hours = Math.floor(mins / 60);
+        const remaining = mins % 60;
+        return remaining > 0 ? `${hours}h ${remaining}m` : `${hours}h`;
+    };
+
     const handleSelectResult = async (fetchId: string, itemTitle: string) => {
         setLoading(true);
         const selectedObj = searchResults.find(r => r.id === fetchId);
@@ -127,7 +137,7 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                     type: data.type || formData.type,
                     seasons: data.seasons || 0,
                     episodes: data.episodes || 0,
-                    length: data.runtime || '',
+                    length: data.runtime ? formatRuntime(data.runtime) : '',
                     genre: data.genres || '',
                     rating: data.rating || '',
                     thumbnail: data.poster || '',
@@ -185,7 +195,7 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                 type: isSeries ? 'Series' : 'Movie',
                 seasons: tmdbData?.number_of_seasons || 0,
                 episodes: tmdbData?.number_of_episodes || 0,
-                length: richRuntime || '',
+                length: richRuntime ? formatRuntime(richRuntime) : '',
                 genre: richGenres || '',
                 rating: tmdbData?.vote_average ? tmdbData.vote_average.toFixed(1).toString() : (selectedObj?.rating || ''),
                 thumbnail: tmdbData?.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}` : (selectedObj?.i?.imageUrl || '')
