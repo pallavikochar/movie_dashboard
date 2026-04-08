@@ -73,116 +73,89 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
         setLoading(true);
         setSearchResults([]);
         try {
-            const res = await axios.get(`/api/scrape?title=${encodeURIComponent(searchQuery)}&list=true`);
+            const tmdbKey = '15d2ea6d0dc1d476efbca3eba2b9bbfb';
+            const fetchUrl = `https://api.themoviedb.org/3/search/multi?api_key=${tmdbKey}&query=${encodeURIComponent(searchQuery)}`;
+            const res = await axios.get(fetchUrl);
             const results = res.data.results || [];
-            if (results.length === 0) alert('No results found.');
-            else setSearchResults(results);
-        } catch (error) {
-            console.warn('API error (likely GitHub Pages). Falling back to TMDB.');
-            try {
-                const tmdbKey = '15d2ea6d0dc1d476efbca3eba2b9bbfb';
-                const fetchUrl = `https://api.themoviedb.org/3/search/multi?api_key=${tmdbKey}&query=${encodeURIComponent(searchQuery)}`;
-                const res = await axios.get(fetchUrl);
-                const results = res.data.results || [];
-                const filtered = results.filter((r: any) => r.media_type === 'movie' || r.media_type === 'tv');
+            const filtered = results.filter((r: any) => r.media_type === 'movie' || r.media_type === 'tv');
 
-                if (filtered.length === 0) {
-                    alert('No results found.');
-                } else {
-                    const mapped = filtered.map((r: any) => ({
-                        id: r.id.toString(),
-                        l: r.title || r.name,
-                        y: (r.release_date || r.first_air_date || '').split('-')[0],
-                        q: r.media_type === 'tv' ? 'TV Series' : 'Movie',
-                        s: r.overview || '',
-                        i: { imageUrl: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : '' },
-                        rating: r.vote_average ? r.vote_average.toFixed(1).toString() : '',
-                    }));
-                    setSearchResults(mapped);
-                }
-            } catch (fallbackError) {
-                console.error(fallbackError);
-                alert('Failed to search natively, please try again.');
+            if (filtered.length === 0) {
+                alert('No results found.');
+            } else {
+                const mapped = filtered.map((r: any) => ({
+                    id: r.id.toString(),
+                    l: r.title || r.name,
+                    y: (r.release_date || r.first_air_date || '').split('-')[0],
+                    q: r.media_type === 'tv' ? 'TV Series' : 'Movie',
+                    s: r.overview || '',
+                    i: { imageUrl: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : '' },
+                    rating: r.vote_average ? r.vote_average.toFixed(1).toString() : '',
+                }));
+                setSearchResults(mapped);
             }
+        } catch (error) {
+            console.error(error);
+            alert('Failed to search natively, please try again.');
         } finally {
             setLoading(false);
         }
     };
 
-    const handleSelectResult = async (imdbId: string, itemTitle: string) => {
+    const handleSelectResult = async (tmdbId: string, itemTitle: string) => {
         setLoading(true);
-        const selectedObj = searchResults.find(r => r.id === imdbId);
+        const selectedObj = searchResults.find(r => r.id === tmdbId);
         setSearchResults([]);
+        
         try {
-            const res = await axios.get(`/api/scrape?imdbId=${encodeURIComponent(imdbId)}`);
-            const data = res.data;
+            const isSeries = selectedObj?.q === 'TV Series';
+            const tmdbKey = '15d2ea6d0dc1d476efbca3eba2b9bbfb';
+            const endpoint = isSeries ? `tv/${tmdbId}` : `movie/${tmdbId}`;
+            
+            const customRes = await axios.get(`https://api.themoviedb.org/3/${endpoint}?api_key=${tmdbKey}`);
+            const tmdbData = customRes.data;
+            
+            const richGenres = tmdbData.genres ? tmdbData.genres.map((g: any) => g.name).join(', ') : '';
+            let richRuntime = '';
+            if (!isSeries && tmdbData.runtime) richRuntime = `${tmdbData.runtime}m`;
+            if (isSeries && tmdbData.episode_run_time && tmdbData.episode_run_time.length > 0) richRuntime = `${tmdbData.episode_run_time[0]}m`;
 
             setFormData({
                 ...formData,
-                title: data.title || itemTitle,
-                type: data.type || formData.type,
-                seasons: data.seasons || 0,
-                episodes: data.episodes || 0,
-                length: data.runtime || '',
-                genre: data.genres || '',
-                rating: data.rating || '',
-                thumbnail: data.poster || '',
+                title: tmdbData.title || tmdbData.name || selectedObj?.l || itemTitle,
+                type: isSeries ? 'Series' : 'Movie',
+                seasons: tmdbData.number_of_seasons || 0,
+                episodes: tmdbData.number_of_episodes || 0,
+                length: richRuntime || '',
+                genre: richGenres || '',
+                rating: tmdbData.vote_average ? tmdbData.vote_average.toFixed(1).toString() : (selectedObj?.rating || ''),
+                thumbnail: tmdbData.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}` : (selectedObj?.i?.imageUrl || '')
             });
-
-            setPreview(data);
+            
+            setPreview({
+                title: tmdbData.title || tmdbData.name || selectedObj?.l || itemTitle,
+                type: isSeries ? 'Series' : 'Movie',
+                thumbnail: tmdbData.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}` : (selectedObj?.i?.imageUrl || '')
+            });
             setSearchQuery('');
-
         } catch (error) {
-            console.warn('API fetch failed, populating using TMDB details');
+            console.error(error);
             if (selectedObj) {
                 const isSeries = selectedObj.q === 'TV Series';
-                const tmdbKey = '15d2ea6d0dc1d476efbca3eba2b9bbfb';
-                
-                try {
-                    const endpoint = isSeries ? `tv/${imdbId}` : `movie/${imdbId}`;
-                    const customRes = await axios.get(`https://api.themoviedb.org/3/${endpoint}?api_key=${tmdbKey}`);
-                    const tmdbData = customRes.data;
-                    
-                    const richGenres = tmdbData.genres ? tmdbData.genres.map((g: any) => g.name).join(', ') : '';
-                    let richRuntime = '';
-                    if (!isSeries && tmdbData.runtime) richRuntime = `${tmdbData.runtime}m`;
-                    if (isSeries && tmdbData.episode_run_time && tmdbData.episode_run_time.length > 0) richRuntime = `${tmdbData.episode_run_time[0]}m`;
-
-                    setFormData({
-                        ...formData,
-                        title: tmdbData.title || tmdbData.name || selectedObj.l || itemTitle,
-                        type: isSeries ? 'Series' : 'Movie',
-                        seasons: tmdbData.number_of_seasons || 0,
-                        episodes: tmdbData.number_of_episodes || 0,
-                        length: richRuntime || '',
-                        genre: richGenres || '',
-                        rating: tmdbData.vote_average ? tmdbData.vote_average.toFixed(1).toString() : (selectedObj.rating || ''),
-                        thumbnail: tmdbData.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}` : (selectedObj.i?.imageUrl || '')
-                    });
-                    
-                    setPreview({
-                        title: tmdbData.title || tmdbData.name || selectedObj.l || itemTitle,
-                        type: isSeries ? 'Series' : 'Movie',
-                        thumbnail: tmdbData.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}` : (selectedObj.i?.imageUrl || '')
-                    });
-                } catch (e) {
-                   // Fallback to basic if even details fail
-                   setFormData({
-                       ...formData,
-                       title: selectedObj.l || itemTitle,
-                       type: isSeries ? 'Series' : 'Movie',
-                       rating: selectedObj.rating || '',
-                       thumbnail: selectedObj.i?.imageUrl || ''
-                   });
-                   setPreview({
-                       title: selectedObj.l || itemTitle,
-                       type: isSeries ? 'Series' : 'Movie',
-                       thumbnail: selectedObj.i?.imageUrl || ''
-                   });
-                }
+                setFormData({
+                    ...formData,
+                    title: selectedObj.l || itemTitle,
+                    type: isSeries ? 'Series' : 'Movie',
+                    rating: selectedObj.rating || '',
+                    thumbnail: selectedObj.i?.imageUrl || ''
+                });
+                setPreview({
+                    title: selectedObj.l || itemTitle,
+                    type: isSeries ? 'Series' : 'Movie',
+                    thumbnail: selectedObj.i?.imageUrl || ''
+                });
                 setSearchQuery('');
             } else {
-                alert('Failed to fetch data, please enter manually.');
+                alert('Failed to fetch rich data, please enter manually.');
             }
         } finally {
             setLoading(false);
