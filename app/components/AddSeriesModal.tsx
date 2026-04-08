@@ -109,7 +109,6 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
             setLoading(false);
         }
     };
-
     const formatRuntime = (minutesStr: string | number) => {
         if (!minutesStr) return '';
         const strVal = String(minutesStr);
@@ -120,6 +119,36 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
         const hours = Math.floor(mins / 60);
         const remaining = mins % 60;
         return remaining > 0 ? `${hours}h ${remaining}m` : `${hours}h`;
+    };
+
+    const fetchImdbRating = async (imdbId: string): Promise<string | null> => {
+        if (!imdbId) return null;
+        try {
+            // 1. Try native scraper (works locally)
+            const nativeRes = await axios.get(`/api/scrape?imdbId=${imdbId}`, { timeout: 3000 });
+            if (nativeRes.data.rating) return nativeRes.data.rating;
+        } catch (e) {
+            // 2. Fallback for Static Pages: Scrape via CORS proxy
+            try {
+                const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(`https://www.imdb.com/title/${imdbId}/`)}`;
+                const res = await axios.get(proxyUrl, { timeout: 8000 });
+                const html = res.data.contents;
+                
+                // Try JSON-LD or Next DATA patterns
+                const ldMatch = html.match(/"aggregateRating":\s*\{[^}]*"ratingValue":\s*"?([\d.]+)"?/i);
+                if (ldMatch) return ldMatch[1];
+                
+                const nextMatch = html.match(/"aggregateRating":\s*([\d.]+)/i); // Simplified pattern
+                if (nextMatch) return nextMatch[1];
+                
+                // Fallback to searching for the 10/10 pattern
+                const scoreMatch = html.match(/>([\d\.]+)\s*<\/span>[^<]*<span[^>]*>\/10/);
+                if (scoreMatch) return scoreMatch[1];
+            } catch (err) {
+                console.warn('CORS Scrape failed');
+            }
+        }
+        return null;
     };
 
     const handleSelectResult = async (fetchId: string, itemTitle: string) => {
@@ -158,14 +187,11 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
         try {
             const isSeries = selectedObj?.q === 'TV Series' || (selectedObj?.q || '').includes('Series');
             const tmdbKey = '15d2ea6d0dc1d476efbca3eba2b9bbfb';
-            
-            // Note: If fetchId starts with 'tt', we can actually use it as the `find` endpoint in TMDB!
-            // But since our Github pages fallback already maps TMDB ids natively, we just use the numerical ID.
             let endpoint = isSeries ? `tv/${fetchId}` : `movie/${fetchId}`;
-            let apiFetchUrl = `https://api.themoviedb.org/3/${endpoint}?api_key=${tmdbKey}`;
+            let apiFetchUrl = `https://api.themoviedb.org/3/${endpoint}?api_key=${tmdbKey}&append_to_response=external_ids`;
             
             if (fetchId.startsWith('tt')) {
-                 apiFetchUrl = `https://api.themoviedb.org/3/find/${fetchId}?api_key=${tmdbKey}&external_source=imdb_id`;
+                 apiFetchUrl = `https://api.themoviedb.org/3/find/${fetchId}?api_key=${tmdbKey}&external_source=imdb_id&append_to_response=external_ids`;
             }
 
             const customRes = await axios.get(apiFetchUrl);
@@ -173,8 +199,15 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
             
             // Re-fetch specifics if we used find (to get episodes/seasons)
             if (fetchId.startsWith('tt') && tmdbData) {
-                const specificRes = await axios.get(`https://api.themoviedb.org/3/${isSeries ? 'tv' : 'movie'}/${tmdbData.id}?api_key=${tmdbKey}`);
+                const specificRes = await axios.get(`https://api.themoviedb.org/3/${isSeries ? 'tv' : 'movie'}/${tmdbData.id}?api_key=${tmdbKey}&append_to_response=external_ids`);
                 tmdbData = specificRes.data;
+            }
+
+            // Official IMDb Rating Sync
+            const imdbId = tmdbData?.external_ids?.imdb_id || tmdbData?.imdb_id || (fetchId.startsWith('tt') ? fetchId : null);
+            let officialImdbRating = null;
+            if (imdbId) {
+                officialImdbRating = await fetchImdbRating(imdbId);
             }
 
             const richGenres = tmdbData?.genres ? tmdbData.genres.map((g: any) => g.name).join(', ') : '';
@@ -207,7 +240,7 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                 episodes: tmdbData?.number_of_episodes || 0,
                 length: richRuntime ? formatRuntime(richRuntime) : '',
                 genre: richGenres || '',
-                rating: tmdbData?.vote_average ? tmdbData.vote_average.toFixed(1).toString() : (selectedObj?.rating || ''),
+                rating: officialImdbRating || (tmdbData?.vote_average ? tmdbData.vote_average.toFixed(1).toString() : (selectedObj?.rating || '')),
                 thumbnail: tmdbData?.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}` : (selectedObj?.i?.imageUrl || '')
             });
             
