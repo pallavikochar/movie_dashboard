@@ -180,7 +180,15 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
             const richGenres = tmdbData?.genres ? tmdbData.genres.map((g: any) => g.name).join(', ') : '';
             let richRuntime = '';
             if (!isSeries && tmdbData?.runtime) richRuntime = `${tmdbData.runtime}m`;
-            if (isSeries && tmdbData?.episode_run_time && tmdbData.episode_run_time.length > 0) richRuntime = `${tmdbData.episode_run_time[0]}m`;
+            if (isSeries) {
+                if (tmdbData?.episode_run_time && tmdbData.episode_run_time.length > 0) {
+                    richRuntime = `${tmdbData.episode_run_time[0]}m`;
+                } else if (tmdbData?.last_episode_to_air?.runtime) {
+                    richRuntime = `${tmdbData.last_episode_to_air.runtime}m`;
+                } else if (tmdbData?.next_episode_to_air?.runtime) {
+                    richRuntime = `${tmdbData.next_episode_to_air.runtime}m`;
+                }
+            }
             
             if (isSeries && !richRuntime) {
                 try {
