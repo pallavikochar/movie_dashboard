@@ -165,7 +165,12 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
             const poster = tmdb.poster_path ? `https://image.tmdb.org/t/p/w500${tmdb.poster_path}` : (selectedObj?.i?.imageUrl || '');
             const seasons = isTv ? (tmdb.number_of_seasons || 0) : 0;
 
-            // Set form immediately with TMDb data
+            // TMDb fallback rating (for new movies not yet indexed by OMDb/IMDb)
+            const tmdbRating = tmdb.vote_average && tmdb.vote_count > 50
+                ? tmdb.vote_average.toFixed(1)
+                : '';
+
+            // Set form immediately with TMDb data (rating pre-filled if available)
             setFormData({
                 ...formData,
                 title: tmdb.title || tmdb.name || itemTitle,
@@ -174,7 +179,7 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                 episodes: 0,
                 length: formatRuntime(runtime),
                 genre,
-                rating: '', // filled by OMDb below
+                rating: tmdbRating, // pre-filled; overwritten by OMDb if official score exists
                 thumbnail: poster,
                 status: formData.status,
                 finishedDate: formData.finishedDate,
@@ -182,7 +187,7 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
             setPreview({ title: tmdb.title || tmdb.name || itemTitle, type: isTv ? 'Series' : 'Movie', thumbnail: poster });
             setSearchQuery('');
 
-            // Fetch IMDb rating from OMDb (background — doesn't block the form)
+            // Fetch official IMDb rating from OMDb — overwrites TMDb rating if available
             if (imdbId) {
                 axios.get(`https://www.omdbapi.com/?i=${imdbId}&apikey=${OMDB_KEY}`)
                     .then(res => {
