@@ -68,26 +68,34 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
 
     if (!isOpen) return null;
 
+    const OMDB_KEY = 'thewdb'; // Free tier, CORS-enabled, returns official IMDb data
+
     const handleFetch = async () => {
         if (!searchQuery.trim()) return;
         setLoading(true);
         setSearchResults([]);
         try {
-            // Priority 1: Native Scraper (Local dev server)
+            // Priority 1: Native Server Scraper (Local dev - most detailed)
             const res = await axios.get(`/api/scrape?title=${encodeURIComponent(searchQuery)}&list=true`, { timeout: 4000 });
             const results = res.data.results || [];
             if (results.length === 0) alert('No results found.');
             else setSearchResults(results);
         } catch (error) {
-            // Priority 2: IMDb Suggestions API (works directly from browser, no CORS issues)
+            // Priority 2: OMDb Search API — has CORS support, uses official IMDb data
             try {
-                const queryStr = searchQuery.toLowerCase().trim();
-                const firstChar = queryStr.charAt(0).match(/[a-z0-9]/i) ? queryStr.charAt(0) : 'a';
-                const fetchUrl = `https://v3.sg.media-imdb.com/suggestion/${firstChar}/${encodeURIComponent(queryStr)}.json`;
-                const res = await axios.get(fetchUrl);
-                const results = (res.data.d || []).filter((r: any) => r.id && r.id.startsWith('tt'));
-                if (results.length === 0) alert('No results found.');
-                else setSearchResults(results);
+                const res = await axios.get(`https://www.omdbapi.com/?s=${encodeURIComponent(searchQuery)}&apikey=${OMDB_KEY}`);
+                const items = res.data.Search || [];
+                if (!items.length) { alert('No results found.'); return; }
+                // Map to the same shape the rest of the code expects
+                const mapped = items.map((r: any) => ({
+                    id: r.imdbID,
+                    l: r.Title,
+                    y: r.Year,
+                    q: r.Type === 'series' ? 'TV Series' : 'Movie',
+                    i: { imageUrl: r.Poster !== 'N/A' ? r.Poster : '' },
+                    s: '',
+                }));
+                setSearchResults(mapped);
             } catch (fallbackError) {
                 console.error('Search failed', fallbackError);
                 alert('Search failed. Please check your connection and try again.');
@@ -97,68 +105,43 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
         }
     };
 
-    const formatRuntime = (minutesStr: string | number) => {
-        if (!minutesStr) return '';
-        const strVal = String(minutesStr);
-        if (strVal.includes('h')) return strVal; // Already physically formatted natively by IMDb
-        const mins = parseInt(strVal.replace(/[^0-9]/g, ''));
-        if (isNaN(mins) || mins === 0) return '';
-        if (mins < 60) return `${mins}m`;
-        const hours = Math.floor(mins / 60);
-        const remaining = mins % 60;
-        return remaining > 0 ? `${hours}h ${remaining}m` : `${hours}h`;
-    };
-
-    const fetchImdbRating = async (imdbId: string): Promise<string | null> => {
-        if (!imdbId) return null;
-        
-        // Strategy A: Native Scraper (Local)
-        try {
-            const res = await axios.get(`/api/scrape?imdbId=${imdbId}`, { timeout: 3000 });
-            if (res.data.rating) return res.data.rating.toString();
-        } catch (e) { }
-
-        // Strategy B: Multi-Proxy JSON-LD Parsing (Live Site)
-        const proxies = [
-            `https://api.allorigins.win/get?url=${encodeURIComponent(`https://www.imdb.com/title/${imdbId}/`)}`,
-            `https://corsproxy.io/?${encodeURIComponent(`https://www.imdb.com/title/${imdbId}/`)}`
-        ];
-
-        for (const url of proxies) {
-            try {
-                const res = await axios.get(url, { timeout: 7000 });
-                const html = res.data.contents || res.data;
-                
-                // Extract official JSON-LD block
-                const jsonMatch = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/i);
-                if (jsonMatch) {
-                    try {
-                        const json = JSON.parse(jsonMatch[1]);
-                        const rating = json.aggregateRating?.ratingValue || json.ratingValue;
-                        if (rating) return rating.toString();
-                    } catch (e) {}
-                }
-                
-                // Fallback Regex
-                const regMatch = html.match(/"ratingValue":\s*"([\d.]+)"/i) || html.match(/"ratingValue":\s*([\d.]+)/i);
-                if (regMatch) return regMatch[1];
-            } catch (err) { }
+    const formatRuntime = (runtimeStr: string | number) => {
+        if (!runtimeStr) return '';
+        const str = String(runtimeStr);
+        // Handle "22 min" or "120 min" format from OMDb
+        const minMatch = str.match(/^(\d+)\s*min/i);
+        if (minMatch) {
+            const mins = parseInt(minMatch[1]);
+            if (mins < 60) return `${mins}m`;
+            const h = Math.floor(mins / 60);
+            const m = mins % 60;
+            return m > 0 ? `${h}h ${m}m` : `${h}h`;
         }
-        return null;
+        // Already formatted (e.g. "2h 30m")
+        if (str.includes('h') || str.includes('m')) return str;
+        // Raw number
+        const mins = parseInt(str);
+        if (!isNaN(mins) && mins > 0) {
+            if (mins < 60) return `${mins}m`;
+            const h = Math.floor(mins / 60);
+            const m = mins % 60;
+            return m > 0 ? `${h}h ${m}m` : `${h}h`;
+        }
+        return str;
     };
 
-    const handleSelectResult = async (fetchId: string, itemTitle: string) => {
+    const handleSelectResult = async (imdbId: string, itemTitle: string) => {
         setLoading(true);
-        const selectedObj = searchResults.find(r => r.id === fetchId);
+        const selectedObj = searchResults.find(r => r.id === imdbId);
         setSearchResults([]);
-        
-        // 1. ATTEMPT HIGH-FIDELITY LOCAL SCRAPE
-        if (fetchId.startsWith('tt')) {
+
+        // 1. Try local high-fidelity scraper first (works in local dev)
+        if (imdbId.startsWith('tt')) {
             try {
-                const res = await axios.get(`/api/scrape?imdbId=${encodeURIComponent(fetchId)}`);
+                const res = await axios.get(`/api/scrape?imdbId=${encodeURIComponent(imdbId)}`, { timeout: 4000 });
                 const d = res.data;
-                if (d && !d.error) {
-                    const finalData = {
+                if (d && !d.error && d.rating) {
+                    setFormData({
                         ...formData,
                         title: d.title || itemTitle,
                         type: d.type || 'Movie',
@@ -167,78 +150,52 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                         length: formatRuntime(d.runtime),
                         genre: d.genres || '',
                         rating: d.rating || '',
-                        thumbnail: d.poster || '',
-                        status: 'Watching' as const,
-                        finishedDate: ''
-                    };
-                    setFormData(finalData);
-                    setPreview({ title: finalData.title, type: finalData.type, thumbnail: finalData.thumbnail });
+                        thumbnail: d.poster || selectedObj?.i?.imageUrl || '',
+                        status: formData.status,
+                        finishedDate: formData.finishedDate,
+                    });
+                    setPreview({ title: d.title || itemTitle, type: d.type || 'Movie', thumbnail: d.poster || '' });
                     setSearchQuery('');
                     setLoading(false);
                     return;
                 }
-            } catch (e) { console.warn('Local scrape bypassed'); }
+            } catch (e) { /* fall through to OMDb */ }
         }
 
-        // 2. LIVE SITE FALLBACK (TMDB + IMDb SYNC)
+        // 2. OMDb API — official IMDb data, full CORS support, works on GitHub Pages
         try {
-            const isSeries = selectedObj?.q === 'TV Series' || (selectedObj?.q || '').includes('Series');
-            const tmdbKey = '15d2ea6d0dc1d476efbca3eba2b9bbfb';
-            
-            // Get base data from TMDB
-            let baseData: any = null;
-            if (fetchId.startsWith('tt')) {
-                const findRes = await axios.get(`https://api.themoviedb.org/3/find/${fetchId}?api_key=${tmdbKey}&external_source=imdb_id`);
-                baseData = findRes.data.tv_results?.[0] || findRes.data.movie_results?.[0];
-            } else {
-                const getRes = await axios.get(`https://api.themoviedb.org/3/${isSeries ? 'tv' : 'movie'}/${fetchId}?api_key=${tmdbKey}`);
-                baseData = getRes.data;
-            }
+            const res = await axios.get(`https://www.omdbapi.com/?i=${imdbId}&apikey=${OMDB_KEY}&plot=short`);
+            const d = res.data;
+            if (!d || d.Response === 'False') throw new Error('OMDb returned no data');
 
-            if (!baseData) throw new Error('No base data');
+            const isSeries = d.Type === 'series';
+            const seasonsNum = isSeries ? (parseInt(d.totalSeasons) || 0) : 0;
 
-            // Deep fetch for full details (run-times, etc)
-            const fullRes = await axios.get(`https://api.themoviedb.org/3/${isSeries ? 'tv' : 'movie'}/${baseData.id}?api_key=${tmdbKey}&append_to_response=external_ids`);
-            const tmdb = fullRes.data;
-
-            const imdbId = tmdb.external_ids?.imdb_id || tmdb.imdb_id || (fetchId.startsWith('tt') ? fetchId : null);
-            
-            // RUNTIME LOGIC: Detect sitcoms and prefer < 30m over finale lengths
-            let finalRuntime = '';
-            const runtimes = tmdb.episode_run_time || [];
-            if (!isSeries && tmdb.runtime) finalRuntime = `${tmdb.runtime}m`;
-            else if (isSeries) {
-                const typical = runtimes.find((r: number) => r > 15 && r < 35);
-                if (typical) finalRuntime = `${typical}m`;
-                else if (runtimes.length > 0) finalRuntime = `${runtimes[0]}m`;
-                else if (tmdb.last_episode_to_air?.runtime && tmdb.last_episode_to_air.runtime < 40) finalRuntime = `${tmdb.last_episode_to_air.runtime}m`;
-                else finalRuntime = '22m';
-            }
-
-            // Use verified IMDb rating — fetch it, don't use TMDb's vote_average
-            const verifiedRating = await fetchImdbRating(imdbId || fetchId);
-            
             setFormData({
                 ...formData,
-                title: tmdb.name || tmdb.title || itemTitle,
+                title: d.Title || itemTitle,
                 type: isSeries ? 'Series' : 'Movie',
-                seasons: tmdb.number_of_seasons || 0,
-                episodes: tmdb.number_of_episodes || 0,
-                length: formatRuntime(finalRuntime),
-                genre: tmdb.genres?.map((g: any) => g.name).join(', ') || '',
-                rating: verifiedRating || '',
-                thumbnail: tmdb.poster_path ? `https://image.tmdb.org/t/p/w500${tmdb.poster_path}` : (selectedObj?.i?.imageUrl || '')
+                seasons: seasonsNum,
+                episodes: 0, // OMDb doesn't return total episodes; user can fill in
+                length: formatRuntime(d.Runtime),
+                genre: d.Genre || '',
+                rating: d.imdbRating !== 'N/A' ? d.imdbRating : '',
+                thumbnail: d.Poster !== 'N/A' ? d.Poster : (selectedObj?.i?.imageUrl || ''),
+                status: formData.status,
+                finishedDate: formData.finishedDate,
             });
-
             setPreview({
-                title: tmdb.name || tmdb.title || itemTitle,
+                title: d.Title || itemTitle,
                 type: isSeries ? 'Series' : 'Movie',
-                thumbnail: tmdb.poster_path ? `https://image.tmdb.org/t/p/w500${tmdb.poster_path}` : (selectedObj?.i?.imageUrl || '')
+                thumbnail: d.Poster !== 'N/A' ? d.Poster : (selectedObj?.i?.imageUrl || ''),
             });
-
             setSearchQuery('');
         } catch (error) {
-            console.error('Unified fetch failed', error);
+            console.error('OMDb fetch failed', error);
+            // Last resort: populate with what we have from search results
+            if (selectedObj) {
+                setFormData({ ...formData, title: selectedObj.l || itemTitle, type: selectedObj.q === 'TV Series' ? 'Series' : 'Movie', thumbnail: selectedObj.i?.imageUrl || '' });
+            }
         } finally {
             setLoading(false);
         }
