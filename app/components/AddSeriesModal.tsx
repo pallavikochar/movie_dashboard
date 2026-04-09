@@ -68,32 +68,36 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
 
     if (!isOpen) return null;
 
-    const OMDB_KEY = 'thewdb'; // Free tier, CORS-enabled, returns official IMDb data
+    const TMDB_KEY = '15d2ea6d0dc1d476efbca3eba2b9bbfb';
+    const OMDB_KEY = 'thewdb';
 
     const handleFetch = async () => {
         if (!searchQuery.trim()) return;
         setLoading(true);
         setSearchResults([]);
         try {
-            // Priority 1: Native Server Scraper (Local dev - most detailed)
+            // Priority 1: Native Server Scraper (local dev only)
             const res = await axios.get(`/api/scrape?title=${encodeURIComponent(searchQuery)}&list=true`, { timeout: 4000 });
             const results = res.data.results || [];
             if (results.length === 0) alert('No results found.');
             else setSearchResults(results);
-        } catch (error) {
-            // Priority 2: OMDb Search API — has CORS support, uses official IMDb data
+        } catch {
+            // Priority 2: TMDb search — reliable, no rate limits, CORS-enabled
             try {
-                const res = await axios.get(`https://www.omdbapi.com/?s=${encodeURIComponent(searchQuery)}&apikey=${OMDB_KEY}`);
-                const items = res.data.Search || [];
+                const res = await axios.get(
+                    `https://api.themoviedb.org/3/search/multi?api_key=${TMDB_KEY}&query=${encodeURIComponent(searchQuery)}&language=en-US`
+                );
+                const items = (res.data.results || []).filter((r: any) => r.media_type === 'movie' || r.media_type === 'tv');
                 if (!items.length) { alert('No results found.'); return; }
-                // Map to the same shape the rest of the code expects
-                const mapped = items.map((r: any) => ({
-                    id: r.imdbID,
-                    l: r.Title,
-                    y: r.Year,
-                    q: r.Type === 'series' ? 'TV Series' : 'Movie',
-                    i: { imageUrl: r.Poster !== 'N/A' ? r.Poster : '' },
-                    s: '',
+                const mapped = items.slice(0, 8).map((r: any) => ({
+                    id: r.id.toString(),
+                    tmdbId: r.id,
+                    mediaType: r.media_type,
+                    l: r.title || r.name,
+                    y: (r.release_date || r.first_air_date || '').slice(0, 4),
+                    q: r.media_type === 'tv' ? 'TV Series' : 'Movie',
+                    i: { imageUrl: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : '' },
+                    s: r.overview || '',
                 }));
                 setSearchResults(mapped);
             } catch (fallbackError) {
@@ -105,115 +109,100 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
         }
     };
 
-    const formatRuntime = (runtimeStr: string | number) => {
-        if (!runtimeStr) return '';
-        const str = String(runtimeStr);
-        // Handle "22 min" or "120 min" format from OMDb
-        const minMatch = str.match(/^(\d+)\s*min/i);
-        if (minMatch) {
-            const mins = parseInt(minMatch[1]);
-            if (mins < 60) return `${mins}m`;
-            const h = Math.floor(mins / 60);
-            const m = mins % 60;
-            return m > 0 ? `${h}h ${m}m` : `${h}h`;
-        }
-        // Already formatted (e.g. "2h 30m")
-        if (str.includes('h') || str.includes('m')) return str;
-        // Raw number
-        const mins = parseInt(str);
-        if (!isNaN(mins) && mins > 0) {
-            if (mins < 60) return `${mins}m`;
-            const h = Math.floor(mins / 60);
-            const m = mins % 60;
-            return m > 0 ? `${h}h ${m}m` : `${h}h`;
-        }
-        return str;
+    const formatRuntime = (mins: number) => {
+        if (!mins || isNaN(mins) || mins <= 0) return '';
+        if (mins < 60) return `${mins}m`;
+        const h = Math.floor(mins / 60);
+        const m = mins % 60;
+        return m > 0 ? `${h}h ${m}m` : `${h}h`;
     };
 
-    const handleSelectResult = async (imdbId: string, itemTitle: string) => {
+    const handleSelectResult = async (fetchId: string, itemTitle: string) => {
         setLoading(true);
-        const selectedObj = searchResults.find(r => r.id === imdbId);
+        const selectedObj = searchResults.find(r => r.id === fetchId);
         setSearchResults([]);
 
-        // 1. Try local high-fidelity scraper first (works in local dev)
-        if (imdbId.startsWith('tt')) {
+        // 1. Local high-fidelity scraper (local dev only — skipped silently on live site)
+        if (fetchId.startsWith('tt')) {
             try {
-                const res = await axios.get(`/api/scrape?imdbId=${encodeURIComponent(imdbId)}`, { timeout: 4000 });
+                const res = await axios.get(`/api/scrape?imdbId=${encodeURIComponent(fetchId)}`, { timeout: 4000 });
                 const d = res.data;
                 if (d && !d.error && d.rating) {
-                    setFormData({
-                        ...formData,
-                        title: d.title || itemTitle,
-                        type: d.type || 'Movie',
-                        seasons: d.seasons || 0,
-                        episodes: d.episodes || 0,
-                        length: formatRuntime(d.runtime),
-                        genre: d.genres || '',
-                        rating: d.rating || '',
-                        thumbnail: d.poster || selectedObj?.i?.imageUrl || '',
-                        status: formData.status,
-                        finishedDate: formData.finishedDate,
-                    });
+                    setFormData({ ...formData, title: d.title || itemTitle, type: d.type || 'Movie', seasons: d.seasons || 0, episodes: d.episodes || 0, length: d.runtime || '', genre: d.genres || '', rating: d.rating || '', thumbnail: d.poster || selectedObj?.i?.imageUrl || '', status: formData.status, finishedDate: formData.finishedDate });
                     setPreview({ title: d.title || itemTitle, type: d.type || 'Movie', thumbnail: d.poster || '' });
                     setSearchQuery('');
-                    // Also fetch episodes from TVMaze in the background
-                    if (d.type === 'Series') {
-                        axios.get(`https://api.tvmaze.com/lookup/shows?imdb=${imdbId}`)
-                            .then(tvr => axios.get(`https://api.tvmaze.com/shows/${tvr.data.id}?embed=episodes`))
-                            .then(tvr => {
-                                const eps = tvr.data._embedded?.episodes || [];
-                                if (eps.length > 0) setFormData(prev => ({ ...prev, episodes: eps.length }));
-                            }).catch(() => {});
-                    }
                     setLoading(false);
                     return;
                 }
-            } catch (e) { /* fall through to OMDb */ }
+            } catch { /* fall through */ }
         }
 
-        // 2. OMDb API — official IMDb data, full CORS support, works on GitHub Pages
+        // 2. TMDb for metadata + OMDb for IMDb rating + TVMaze for episodes
         try {
-            const res = await axios.get(`https://www.omdbapi.com/?i=${imdbId}&apikey=${OMDB_KEY}&plot=short`);
-            const d = res.data;
-            if (!d || d.Response === 'False') throw new Error('OMDb returned no data');
+            const isTv = selectedObj?.mediaType === 'tv' || selectedObj?.q === 'TV Series';
+            const tmdbType = isTv ? 'tv' : 'movie';
+            const tmdbId = selectedObj?.tmdbId || fetchId;
 
-            const isSeries = d.Type === 'series';
-            const seasonsNum = isSeries ? (parseInt(d.totalSeasons) || 0) : 0;
+            // Fetch full TMDb details + external IDs in one call
+            const [detailRes, extRes] = await Promise.all([
+                axios.get(`https://api.themoviedb.org/3/${tmdbType}/${tmdbId}?api_key=${TMDB_KEY}&language=en-US`),
+                axios.get(`https://api.themoviedb.org/3/${tmdbType}/${tmdbId}/external_ids?api_key=${TMDB_KEY}`)
+            ]);
+            const tmdb = detailRes.data;
+            const imdbId: string = extRes.data.imdb_id || fetchId;
 
+            // Runtime: for series prefer typical episode length
+            let runtime = 0;
+            if (!isTv) {
+                runtime = tmdb.runtime || 0;
+            } else {
+                const runtimes: number[] = tmdb.episode_run_time || [];
+                const typical = runtimes.find((r: number) => r > 15 && r < 35);
+                runtime = typical || runtimes[0] || 22;
+            }
+
+            const genre = (tmdb.genres || []).map((g: any) => g.name).join(', ');
+            const poster = tmdb.poster_path ? `https://image.tmdb.org/t/p/w500${tmdb.poster_path}` : (selectedObj?.i?.imageUrl || '');
+            const seasons = isTv ? (tmdb.number_of_seasons || 0) : 0;
+
+            // Set form immediately with TMDb data
             setFormData({
                 ...formData,
-                title: d.Title || itemTitle,
-                type: isSeries ? 'Series' : 'Movie',
-                seasons: seasonsNum,
-                episodes: 0, // Will be filled by TVMaze below
-                length: formatRuntime(d.Runtime),
-                genre: d.Genre || '',
-                rating: d.imdbRating !== 'N/A' ? d.imdbRating : '',
-                thumbnail: d.Poster !== 'N/A' ? d.Poster : (selectedObj?.i?.imageUrl || ''),
+                title: tmdb.title || tmdb.name || itemTitle,
+                type: isTv ? 'Series' : 'Movie',
+                seasons,
+                episodes: 0,
+                length: formatRuntime(runtime),
+                genre,
+                rating: '', // filled by OMDb below
+                thumbnail: poster,
                 status: formData.status,
                 finishedDate: formData.finishedDate,
             });
-            setPreview({
-                title: d.Title || itemTitle,
-                type: isSeries ? 'Series' : 'Movie',
-                thumbnail: d.Poster !== 'N/A' ? d.Poster : (selectedObj?.i?.imageUrl || ''),
-            });
+            setPreview({ title: tmdb.title || tmdb.name || itemTitle, type: isTv ? 'Series' : 'Movie', thumbnail: poster });
             setSearchQuery('');
 
-            // Fetch exact episode count from TVMaze in the background (doesn't block the UI)
-            if (isSeries && imdbId.startsWith('tt')) {
+            // Fetch IMDb rating from OMDb (background — doesn't block the form)
+            if (imdbId) {
+                axios.get(`https://www.omdbapi.com/?i=${imdbId}&apikey=${OMDB_KEY}`)
+                    .then(res => {
+                        const rating = res.data.imdbRating;
+                        if (rating && rating !== 'N/A') setFormData(prev => ({ ...prev, rating }));
+                    }).catch(() => {});
+            }
+
+            // Fetch exact episode count from TVMaze (background — series only)
+            if (isTv && imdbId) {
                 axios.get(`https://api.tvmaze.com/lookup/shows?imdb=${imdbId}`)
                     .then(tvr => axios.get(`https://api.tvmaze.com/shows/${tvr.data.id}?embed=episodes`))
                     .then(tvr => {
                         const eps = tvr.data._embedded?.episodes || [];
                         if (eps.length > 0) setFormData(prev => ({ ...prev, episodes: eps.length }));
-                    })
-                    .catch(() => {}); // silently ignore if TVMaze doesn't have it
+                    }).catch(() => {});
             }
 
         } catch (error) {
-            console.error('OMDb fetch failed', error);
-            // Last resort: populate with what we have from search results
+            console.error('Fetch failed', error);
             if (selectedObj) {
                 setFormData({ ...formData, title: selectedObj.l || itemTitle, type: selectedObj.q === 'TV Series' ? 'Series' : 'Movie', thumbnail: selectedObj.i?.imageUrl || '' });
             }
