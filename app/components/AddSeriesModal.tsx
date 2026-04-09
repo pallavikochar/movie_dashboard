@@ -156,6 +156,15 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                     });
                     setPreview({ title: d.title || itemTitle, type: d.type || 'Movie', thumbnail: d.poster || '' });
                     setSearchQuery('');
+                    // Also fetch episodes from TVMaze in the background
+                    if (d.type === 'Series') {
+                        axios.get(`https://api.tvmaze.com/lookup/shows?imdb=${imdbId}`)
+                            .then(tvr => axios.get(`https://api.tvmaze.com/shows/${tvr.data.id}?embed=episodes`))
+                            .then(tvr => {
+                                const eps = tvr.data._embedded?.episodes || [];
+                                if (eps.length > 0) setFormData(prev => ({ ...prev, episodes: eps.length }));
+                            }).catch(() => {});
+                    }
                     setLoading(false);
                     return;
                 }
@@ -176,7 +185,7 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                 title: d.Title || itemTitle,
                 type: isSeries ? 'Series' : 'Movie',
                 seasons: seasonsNum,
-                episodes: 0, // OMDb doesn't return total episodes; user can fill in
+                episodes: 0, // Will be filled by TVMaze below
                 length: formatRuntime(d.Runtime),
                 genre: d.Genre || '',
                 rating: d.imdbRating !== 'N/A' ? d.imdbRating : '',
@@ -190,6 +199,18 @@ export default function AddSeriesModal({ isOpen, onClose, onAdd, initialData }: 
                 thumbnail: d.Poster !== 'N/A' ? d.Poster : (selectedObj?.i?.imageUrl || ''),
             });
             setSearchQuery('');
+
+            // Fetch exact episode count from TVMaze in the background (doesn't block the UI)
+            if (isSeries && imdbId.startsWith('tt')) {
+                axios.get(`https://api.tvmaze.com/lookup/shows?imdb=${imdbId}`)
+                    .then(tvr => axios.get(`https://api.tvmaze.com/shows/${tvr.data.id}?embed=episodes`))
+                    .then(tvr => {
+                        const eps = tvr.data._embedded?.episodes || [];
+                        if (eps.length > 0) setFormData(prev => ({ ...prev, episodes: eps.length }));
+                    })
+                    .catch(() => {}); // silently ignore if TVMaze doesn't have it
+            }
+
         } catch (error) {
             console.error('OMDb fetch failed', error);
             // Last resort: populate with what we have from search results
