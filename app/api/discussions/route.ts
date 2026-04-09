@@ -2,24 +2,69 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
+import os from 'os';
 import { supabase } from '@/app/lib/supabase';
 
+// Primary data file (gitignored — safe from code updates)
 const DATA_PATH = path.join(process.cwd(), 'data', 'discussions.json');
 
-async function readLocal() {
+// Persistent backup outside the project — survives git operations, rebuilds, etc.
+const BACKUP_DIR = path.join(os.homedir(), '.movie-dashboard');
+const BACKUP_PATH = path.join(BACKUP_DIR, 'discussions.json');
+
+async function ensureDataFile(filePath: string) {
     try {
-        const data = await fs.readFile(DATA_PATH, 'utf-8');
-        return JSON.parse(data);
-    } catch (error) {
+        await fs.access(filePath);
+    } catch {
+        // File doesn't exist — initialize with empty array (never overwrite existing data)
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, '[]', 'utf-8');
+    }
+}
+
+async function readDataFile(filePath: string): Promise<any[]> {
+    try {
+        const raw = await fs.readFile(filePath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+    } catch {
         return [];
     }
 }
 
-async function writeLocal(data: any) {
+async function readLocal(): Promise<any[]> {
+    await ensureDataFile(DATA_PATH);
+    const primary = await readDataFile(DATA_PATH);
+
+    // If primary is empty, try restoring from backup
+    if (primary.length === 0) {
+        await ensureDataFile(BACKUP_PATH);
+        const backup = await readDataFile(BACKUP_PATH);
+        if (backup.length > 0) {
+            console.log('[discussions] Primary empty — restoring from backup');
+            await atomicWrite(DATA_PATH, backup);
+            return backup;
+        }
+    }
+    return primary;
+}
+
+async function atomicWrite(filePath: string, data: any[]): Promise<void> {
+    // Write to a temp file first, then rename — prevents corruption on crash
+    const tmp = filePath + '.tmp';
+    const json = JSON.stringify(data, null, 2);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(tmp, json, 'utf-8');
+    await fs.rename(tmp, filePath);
+}
+
+async function writeLocal(data: any[]): Promise<void> {
     try {
-        await fs.writeFile(DATA_PATH, JSON.stringify(data, null, 2), 'utf-8');
+        // Write primary and backup atomically
+        await atomicWrite(DATA_PATH, data);
+        await atomicWrite(BACKUP_PATH, data);
     } catch (error) {
-        console.error('Local JSON Write Error:', error);
+        console.error('[discussions] Write error:', error);
     }
 }
 
@@ -62,12 +107,12 @@ export async function POST(req: Request) {
             likes: 0
         };
 
-        // 1. Local
+        // 1. Save locally (primary + backup)
         const localData = await readLocal();
         localData.push(newPost);
         await writeLocal(localData);
 
-        // 2. Supabase
+        // 2. Supabase (optional cloud sync)
         if (isSupabaseConfigured()) {
             await supabase.from('discussions').insert([newPost]);
         }
